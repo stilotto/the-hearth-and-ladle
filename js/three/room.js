@@ -630,22 +630,30 @@ window.addEventListener('blur', () => keys.clear());
 // touch: left half moves, right half looks
 canvas.addEventListener('touchstart', (e) => {
   for (const t of e.changedTouches) {
-    if (t.clientX < window.innerWidth / 2 && touch.id === null) { touch.id = t.identifier; touch.sx = t.clientX; touch.sy = t.clientY; }
+    if (t.clientX < window.innerWidth / 2 && touch.id === null) {
+      touch.id = t.identifier; touch.sx = t.clientX; touch.sy = t.clientY;
+      const st = $('#stick'); st.hidden = false; st.style.left = t.clientX + 'px'; st.style.top = t.clientY + 'px'; st.firstChild.style.transform = '';
+    }
     else if (touch.lookId === null) { touch.lookId = t.identifier; touch.lx = t.clientX; touch.ly = t.clientY; }
   }
 }, { passive: true });
 canvas.addEventListener('touchmove', (e) => {
   for (const t of e.changedTouches) {
-    if (t.identifier === touch.id) { touch.move.x = clamp((t.clientX - touch.sx) / 50, -1, 1); touch.move.y = clamp(-(t.clientY - touch.sy) / 50, -1, 1); }
+    if (t.identifier === touch.id) {
+      touch.move.x = clamp((t.clientX - touch.sx) / 50, -1, 1); touch.move.y = clamp(-(t.clientY - touch.sy) / 50, -1, 1);
+      $('#stick').firstChild.style.transform = `translate(${touch.move.x * 34}px, ${-touch.move.y * 34}px)`;
+    }
     if (t.identifier === touch.lookId) { player.yaw -= (t.clientX - touch.lx) * 0.005; player.pitch = clamp(player.pitch - (t.clientY - touch.ly) * 0.005, -1.2, 1.2); touch.lx = t.clientX; touch.ly = t.clientY; }
   }
 }, { passive: true });
-canvas.addEventListener('touchend', (e) => {
+const touchEnd = (e) => {
   for (const t of e.changedTouches) {
-    if (t.identifier === touch.id) { touch.id = null; touch.move.x = touch.move.y = 0; }
+    if (t.identifier === touch.id) { touch.id = null; touch.move.x = touch.move.y = 0; $('#stick').hidden = true; }
     if (t.identifier === touch.lookId) touch.lookId = null;
   }
-});
+};
+canvas.addEventListener('touchend', touchEnd);
+canvas.addEventListener('touchcancel', touchEnd);
 
 function applyQuality() {
   renderer.shadowMap.enabled = quality.high;
@@ -788,6 +796,7 @@ createCast();
 startDay(1);
 G.paused = true;
 $('#innName').textContent = lore.inn;
+if (matchMedia('(pointer: coarse)').matches) $('#hint').textContent = 'Left thumb walks · right thumb looks';
 $('#signName').textContent = lore.inn;
 document.title = `${lore.inn} · Step Inside`;
 resize();

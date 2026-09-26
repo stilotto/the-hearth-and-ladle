@@ -37,11 +37,15 @@
   .sheet p { font-size: 17px; margin: 8px 0; }
   .sheet ul { padding-left: 20px; margin: 8px 0; }
   .sheet .small { font-size: 13px; color: #7a6448; }
+  .touchonly { display: none; }
+  @media (pointer: coarse) { .touchonly { display: list-item; } }
   .btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 14px; }
   .btns button, .btns a { font: inherit; font-size: 16px; background: #3b2717; color: var(--ink); border: 1px solid #2a1a10; border-radius: 4px; padding: 8px 18px; cursor: pointer; text-decoration: none; }
   .btns .primary { background: #7a2a1a; }
   .btns button:hover, .btns a:hover { filter: brightness(1.2); }
   button:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  #stick { width: 110px; height: 110px; margin: -55px 0 0 -55px; border: 2px solid #f0e2c255; border-radius: 50%; }
+  #stick i { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%; background: #f0e2c244; }
   @media (max-width: 600px) { #captions p { font-size: 15px; } #hint { white-space: normal; width: calc(100% - 32px); text-align: center; } }
 </style>
 </head>
@@ -52,6 +56,7 @@
 <div id="look" class="hud"></div>
 <div id="captions" class="hud" aria-live="polite"></div>
 <div id="toasts" class="hud"></div>
+<div id="stick" class="hud" hidden><i></i></div>
 <div id="hint" class="hud">WASD to walk · mouse to look · Shift to hurry · hold F to let time pass · M sound · Q quality · Esc frees the mouse</div>
 
 <div id="intro" class="sheet-wrap">
@@ -60,6 +65,7 @@
     <p>Push the door open and step in out of the weather. The fire's lit, the ale's poured, and the evening's regulars are drifting in.</p>
     <ul>
       <li>Walk up to people to hear what they're saying. Their words appear as captions.</li>
+      <li class="touchonly">On a phone: drag on the left half to walk, drag on the right half to look around. Turn it sideways for the best view.</li>
       <li>Look at someone to see who they are and what they're doing.</li>
       <li>Stay till dusk and the pot-boy lights the candles one by one.</li>
     </ul>
