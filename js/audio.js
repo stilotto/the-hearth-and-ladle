@@ -24,6 +24,10 @@ function loop(filterType, freq, q, gainNode) {
 
 export const Sfx = {
   on: false,
+  spatial: false,     // 3D view: fire and rain come from positional sources instead
+  get ctx() { return ctx; },
+  get out() { return master; },
+  get noise() { return noiseBuf; },
   init() {
     if (ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -55,20 +59,20 @@ export const Sfx = {
     if (!ctx || !this.on) return;
     const t = ctx.currentTime;
     const patrons = G.agents.filter((a) => a.present && a.kind === 'person').length;
-    fireG.gain.setTargetAtTime(0.05 + 0.1 * G.fire, t, 0.5);
-    rainG.gain.setTargetAtTime(G.weather === 'storm' ? 0.07 : G.weather === 'rain' ? 0.04 : 0, t, 1);
+    fireG.gain.setTargetAtTime(this.spatial ? 0 : 0.05 + 0.1 * G.fire, t, 0.5);
+    rainG.gain.setTargetAtTime(this.spatial ? 0 : G.weather === 'storm' ? 0.07 : G.weather === 'rain' ? 0.04 : 0, t, 1);
     murmurG.gain.setTargetAtTime(Math.min(0.09, patrons * 0.006), t, 1);
-    if (Math.random() < dt * 9 * G.fire) this.crackle();
+    if (Math.random() < dt * 9 * G.fire) this.crackle(this.fireOut);
     if (G.music.playing && !G.paused) this.lute(t);
     else { nextNote = 0; }
   },
-  crackle() {
+  crackle(dest) {
     if (!ctx) return;
     const t = ctx.currentTime;
     const s = ctx.createBufferSource(); s.buffer = noiseBuf;
     const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1200 + Math.random() * 2500;
     const g = ctx.createGain(); g.gain.setValueAtTime(0.05 + Math.random() * 0.09, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.03 + Math.random() * 0.04);
-    s.connect(f).connect(g).connect(fireG);
+    s.connect(f).connect(g).connect(dest || fireG);
     s.start(t, Math.random() * 1.5, 0.1);
   },
   pluck(midi, when, vel = 0.3) {
@@ -92,7 +96,7 @@ export const Sfx = {
     const s = ctx.createBufferSource(); s.buffer = buf;
     const g = ctx.createGain(); g.gain.value = vel;
     const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 2600;
-    s.connect(f).connect(g).connect(master);
+    s.connect(f).connect(g).connect(this.luteOut || master);
     s.start(when);
   },
   lute(t) {

@@ -7,6 +7,9 @@ modules and no build step, so a push to `main` is a deploy.
 
 - Push straight to `main`; a push is how the human reviews the game.
 - No bundler, no npm dependencies. Google Fonts is the only external request.
+  Three.js is vendored as `vendor/three.module.min.js` (a minified r186 bundle).
+- `index.html` is the 2D room; `3d.html` is the same simulation in first-person 3D.
+  Both import `js/sim.js`, so changes to people and plots show up in both.
 - It must work at phone width and honor prefers-reduced-motion (`G.reduced`).
 - Test locally with `python3 -m http.server` (modules won't load from file://).
 

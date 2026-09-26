@@ -183,7 +183,8 @@ function showIntro(first) {
       <li>At dawn, <b>name the guilty</b>.</li>
     </ul>
     <p class="keys">Space pauses · 1–4 set the speed · Esc stops following</p>
-    <div class="btns">${first ? `<button class="primary" data-go="sound">Enter, with sound</button><button data-go="quiet">Enter quietly</button>` : `<button class="primary" data-go="back">Back to the room</button>`}</div>`);
+    <div class="btns">${first ? `<button class="primary" data-go="sound">Enter, with sound</button><button data-go="quiet">Enter quietly</button>` : `<button class="primary" data-go="back">Back to the room</button>`}</div>
+    <p class="step3d"><a href="3d.html">Or step inside the room in 3D →</a></p>`);
   m.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.go === 'sound') { Sfx.setOn(true); }
     syncSound();

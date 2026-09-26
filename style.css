@@ -125,6 +125,8 @@ main { flex: 1; display: flex; gap: 12px; padding: 10px 12px; min-height: 0; }
 .how { padding-left: 20px; font-size: 16px; }
 .how li { margin: 3px 0; }
 .keys { color: #7a6448; font-size: 13px; text-align: center; }
+.step3d { text-align: center; margin: 12px 0 0; }
+.step3d a { color: #7a2a1a; font-family: "IM Fell English SC", serif; font-size: 17px; }
 .truth { background: #0000000d; padding: 8px 10px; border-left: 3px solid #8a4a2a; }
 .btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
 .btns button { background: #3b2717; color: var(--ink); border: 1px solid #2a1a10; border-radius: 4px; padding: 8px 18px; font-size: 16px; }

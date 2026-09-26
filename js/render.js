@@ -195,7 +195,7 @@ function mixHex(a, b, t) {
   const c = (s) => Math.round(lerp((pa >> s) & 255, (pb >> s) & 255, t));
   return `rgb(${c(16)},${c(8)},${c(0)})`;
 }
-function skyAt(h) {
+export function skyAt(h) {
   let i = 0; while (i < KEYS.length - 2 && KEYS[i + 1][0] <= h) i++;
   const a = KEYS[i], b = KEYS[i + 1], t = clamp((h - a[0]) / (b[0] - a[0]), 0, 1);
   const cloud = G.weather === 'clear' ? 1 : G.weather === 'rain' ? 0.75 : 0.6;

@@ -14,6 +14,14 @@ You don't control anyone. You **listen**:
   listening when they happen.
 - At dawn, name the guilty.
 
+## Step inside (3D)
+
+`3d.html` runs the same simulation as a first-person 3D room built with
+Three.js (vendored in `vendor/`, MIT license). Walk with WASD, look with the
+mouse, and hear conversations as captions when you're close enough. Fire,
+rain and the bard are positional sound, and all the textures are generated
+in code.
+
 ## Run it
 
 It's static files with no build step. ES modules need to be served over http:
@@ -36,3 +44,6 @@ Then open http://localhost:8000.
 | `js/render.js` | Room art, y-sorted drawing, light map, particles, speech bubbles |
 | `js/audio.js` | Procedural fire, rain, murmur, thunder, and a Karplus-Strong lute |
 | `js/ui.js` | Panels, journal, guest list, intro and dawn modals |
+| `js/three/room.js` | The 3D room: geometry, lighting, fire, player, positional audio |
+| `js/three/people.js` | Low-poly bodies built from each character's look, with jointed limbs |
+| `js/three/tex.js` | Procedural wood, plaster, stone, rug and flame textures |

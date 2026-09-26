@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Step Inside</title>
+<meta name="description" content="Walk into the common room in 3D: firelight, rain on the windows, and conversations you overhear as you pass.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; --ink: #f0e2c2; --dim: #b39d7a; --gold: #e8c45a; --line: #5a3d24; --parch: #efe0bd; --parch-ink: #2a1a0e; }
+  html, body { margin: 0; height: 100%; background: #0a0705; color: var(--ink); overflow: hidden; font: 16px/1.4 "IM Fell English", Georgia, serif; }
+  #view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+  .hud { position: fixed; pointer-events: none; }
+  #top { top: 12px; left: 16px; right: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+  #innName { font-family: "Cinzel Decorative", serif; color: var(--gold); font-size: 18px; text-shadow: 0 2px 6px #000; }
+  #clock { color: var(--dim); font-size: 14px; text-shadow: 0 1px 4px #000; }
+  #top a { pointer-events: auto; color: var(--ink); background: #1c120acc; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; text-decoration: none; font-size: 14px; }
+  #top a:hover, #top a:focus-visible { border-color: var(--gold); }
+  #cross { left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: #f0e2c2aa; box-shadow: 0 0 3px #000; }
+  #look { left: 50%; top: calc(50% + 18px); transform: translateX(-50%); text-align: center; text-shadow: 0 1px 4px #000; }
+  #look b { display: block; font-weight: normal; font-family: "IM Fell English SC", serif; font-size: 17px; }
+  #look span { font-size: 13px; color: var(--dim); font-style: italic; }
+  #captions { left: 50%; bottom: 64px; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); text-align: center; }
+  #captions p { margin: 4px auto; display: table; background: #0d0806b8; padding: 4px 12px; border-radius: 4px; font-size: 18px; text-shadow: 0 1px 2px #000; }
+  #captions p.whisper { font-style: italic; color: #d8b8ff; }
+  #captions b { font-weight: normal; font-family: "IM Fell English SC", serif; margin-right: 4px; }
+  #hint { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; color: var(--dim); text-shadow: 0 1px 3px #000; white-space: nowrap; transition: opacity .6s; }
+  #hint.dim { opacity: .45; }
+  #toasts { right: 16px; top: 52px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; max-width: 340px; }
+  .toast { background: #1c120ad0; border: 1px solid var(--line); padding: 5px 12px; border-radius: 14px; font-size: 14px; }
+  .sheet-wrap { position: fixed; inset: 0; display: grid; place-items: center; background: #0a0604c0; padding: 16px; backdrop-filter: blur(2px); }
+  .sheet-wrap[hidden] { display: none; }
+  .sheet { width: min(560px, 100%); max-height: calc(100% - 32px); overflow-y: auto; background: var(--parch); color: var(--parch-ink); border-radius: 4px; padding: 22px 26px; box-shadow: 0 20px 60px #000, inset 0 0 50px #a0784a88; border: 1px solid #8a6a44; }
+  .sheet h1 { font-family: "Cinzel Decorative", serif; font-size: 26px; margin: 0 0 6px; color: #4a2a14; text-wrap: balance; }
+  .sheet p { font-size: 17px; margin: 8px 0; }
+  .sheet ul { padding-left: 20px; margin: 8px 0; }
+  .sheet .small { font-size: 13px; color: #7a6448; }
+  .btns { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-top: 14px; }
+  .btns button, .btns a { font: inherit; font-size: 16px; background: #3b2717; color: var(--ink); border: 1px solid #2a1a10; border-radius: 4px; padding: 8px 18px; cursor: pointer; text-decoration: none; }
+  .btns .primary { background: #7a2a1a; }
+  .btns button:hover, .btns a:hover { filter: brightness(1.2); }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+  @media (max-width: 600px) { #captions p { font-size: 15px; } #hint { white-space: normal; width: calc(100% - 32px); text-align: center; } }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="The inn's common room in 3D"></canvas>
+<div id="top" class="hud"><div><div id="innName"></div><div id="clock"></div></div><a href="./">Back to the 2D room</a></div>
+<div id="cross" class="hud"></div>
+<div id="look" class="hud"></div>
+<div id="captions" class="hud" aria-live="polite"></div>
+<div id="toasts" class="hud"></div>
+<div id="hint" class="hud">WASD to walk · mouse to look · Shift to hurry · hold F to let time pass · M sound · Q quality · Esc frees the mouse</div>
+
+<div id="intro" class="sheet-wrap">
+  <div class="sheet">
+    <h1 id="signName">The Common Room</h1>
+    <p>Push the door open and step in out of the weather. The fire's lit, the ale's poured, and the evening's regulars are drifting in.</p>
+    <ul>
+      <li>Walk up to people to hear what they're saying. Their words appear as captions.</li>
+      <li>Look at someone to see who they are and what they're doing.</li>
+      <li>Stay till dusk and the pot-boy lights the candles one by one.</li>
+    </ul>
+    <p class="small">The same people, routines and secrets as the 2D room, seen from inside. Headphones help: the fire, the rain and the bard all come from where they are.</p>
+    <div class="btns"><button id="enterSound" class="primary">Step inside, with sound</button><button id="enterQuiet">Step inside quietly</button></div>
+  </div>
+</div>
+
+<div id="dawn" class="sheet-wrap" hidden>
+  <div class="sheet">
+    <h1>Dawn</h1>
+    <p>The last candle gutters out and grey light creeps under the shutters. The room is empty but for the smell of woodsmoke and spilled ale.</p>
+    <p class="small">To name tonight's culprit, play the evening in the 2D room, where your journal keeps the clues.</p>
+    <div class="btns"><button id="again" class="primary">Another evening</button><a href="./">Go to the 2D room</a></div>
+  </div>
+</div>
+<script type="module" src="js/three/room.js"></script>
+</body>
+</html>
