@@ -582,7 +582,8 @@ on('heard', (h) => {
   captions.length = Math.min(captions.length, 4);
   renderCaptions();
 });
-on('clue', () => toast('You overheard something that matters. It’s in your journal in the 2D view.'));
+let clueDay = 0;
+on('clue', () => { if (clueDay === G.day) return; clueDay = G.day; toast('You overheard something that matters tonight. Your journal in the 2D room keeps track of clues.'); });
 on('dawn', () => { $('#dawn').hidden = false; document.exitPointerLock?.(); G.paused = true; });
 function renderCaptions() {
   const t = now();
