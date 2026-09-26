@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Common Room</title>
+<meta name="description" content="A living tavern simulation: listen in on locals, adventurers and staff, and unmask tonight's intrigue by dawn.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="hud">
+    <div class="sign"><span id="innName">The Common Room</span><small id="townName"></small></div>
+    <div class="clock"><span id="sky">☀</span><span id="clock">16:00</span><span class="sep">·</span><span id="dayNum">Day 1</span><span class="sep">·</span><span id="weather">Clear</span></div>
+    <div class="purse" title="Takings tonight, in coppers">⛁ <span id="coins">0</span></div>
+    <div class="speed" role="group" aria-label="Speed">
+      <button data-speed="0" title="Pause (space)">❚❚</button>
+      <button data-speed="1" title="Normal (1)">1×</button>
+      <button data-speed="2" title="Fast (2)">2×</button>
+      <button data-speed="4" title="Faster (3)">4×</button>
+      <button data-speed="8" title="Fastest (4)">8×</button>
+    </div>
+    <div class="tools">
+      <button id="soundBtn" title="Sound" aria-pressed="false">🔈</button>
+      <button id="helpBtn" title="How to play">?</button>
+    </div>
+  </header>
+  <main>
+    <div id="stage">
+      <canvas id="scene" aria-label="The common room of the inn"></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="toasts" aria-live="polite"></div>
+    </div>
+    <aside id="panel">
+      <nav class="tabs">
+        <button data-tab="listen" class="on">Listen</button>
+        <button data-tab="journal">Journal <span id="clueBadge" hidden>0</span></button>
+        <button data-tab="guests">Guests</button>
+      </nav>
+      <section class="pane" data-pane="listen">
+        <div id="who"></div>
+        <h4>Overheard</h4>
+        <div id="feed" aria-live="off"></div>
+      </section>
+      <section class="pane" data-pane="journal" hidden><div id="journal"></div></section>
+      <section class="pane" data-pane="guests" hidden><div id="guests"></div></section>
+    </aside>
+  </main>
+</div>
+<div id="modal" hidden></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
