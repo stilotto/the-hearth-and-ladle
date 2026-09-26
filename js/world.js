@@ -164,6 +164,7 @@ export function findPath(sx, sy, tx, ty, o = {}) {
 // ---------------------------------------------------------------- lore
 const INN_ADJ = ['Laughing', 'Gilded', 'Drowned', 'Sleeping', 'Crooked', 'Wandering', 'Silver', 'Lame', 'Last', 'Singing', 'Blind', 'Weary'];
 const INN_NOUN = ['Griffin', 'Stag', 'Rat', 'Lantern', 'Kettle', 'Boar', 'Crow', 'Harp', 'Wyvern', 'Hound', 'Goose', 'Anvil'];
+const INN_NAMES = ['The Hearth and Ladle', 'The Hearth and Ladle', 'The Pike and Flagon', 'The Three Candles', 'The Wet Dog'];
 const TOWNS = ['Brackenford', 'Oxley Cross', 'Thornwick', 'Harrowmere', 'Duskwater', 'Millbury', 'Greyhollow', 'Wendle', 'Coldharbour', 'Ashby Mote'];
 const LORDS = ['Lord Aldric Vane', 'Lady Morwen of the Ash', 'the old Margrave', 'Baron Hollis', 'the Countess Ysolde'];
 const PLACES = ['the Barrow of Kings', 'Greyfen Marsh', 'the Sunken Chapel', 'Blackroot Wood', 'the Weeping Tor', 'Wolfshead Pass', 'the Drowned Abbey', 'the Old Dwarf-road'];
@@ -174,7 +175,7 @@ const DRINKS = ['brown ale', 'cider', 'stout', 'mead', 'bitter'];
 export const lore = (() => {
   const towns = shuffle([...TOWNS]);
   return {
-    inn: `The ${pick(INN_ADJ)} ${pick(INN_NOUN)}`,
+    inn: Math.random() < 0.3 ? pick(INN_NAMES) : `The ${pick(INN_ADJ)} ${pick(INN_NOUN)}`,
     town: towns[0], town2: towns[1],
     lord: pick(LORDS),
     places: shuffle([...PLACES]),
