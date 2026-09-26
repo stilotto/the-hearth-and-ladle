@@ -18,6 +18,7 @@
   #clock { color: var(--dim); font-size: 14px; text-shadow: 0 1px 4px #000; }
   #top a { pointer-events: auto; color: var(--ink); background: #1c120acc; border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; text-decoration: none; font-size: 14px; }
   #top a:hover, #top a:focus-visible { border-color: var(--gold); }
+  #top .links { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   #cross { left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: #f0e2c2aa; box-shadow: 0 0 3px #000; }
   #look { left: 50%; top: calc(50% + 18px); transform: translateX(-50%); text-align: center; text-shadow: 0 1px 4px #000; }
   #look b { display: block; font-weight: normal; font-family: "IM Fell English SC", serif; font-size: 17px; }
@@ -51,7 +52,7 @@
 </head>
 <body>
 <canvas id="view" aria-label="The inn's common room in 3D"></canvas>
-<div id="top" class="hud"><div><div id="innName"></div><div id="clock"></div></div><a href="./">Back to the 2D room</a></div>
+<div id="top" class="hud"><div><div id="innName"></div><div id="clock"></div></div><nav class="links"><a href="./">Back to the 2D room</a><a href="https://stilotto.github.io/">More games</a></nav></div>
 <div id="cross" class="hud"></div>
 <div id="look" class="hud"></div>
 <div id="captions" class="hud" aria-live="polite"></div>
