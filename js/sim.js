@@ -296,7 +296,7 @@ function* payRoom(a) {
   a.activity = 'asking about rooms';
   yield { walk: [spot.x, spot.y] };
   a.facing = 'f';
-  if (a.role === 'adventurer') say(a, 'Rooms for the {party}, and hot water if you have it.');
+  if (a.role === 'adventurer') say(a, 'Rooms for {party}, and hot water if you have it.');
   else say(a, 'A room for the night, please.');
   yield 1.2;
   say(G.keeper, U.pick(['Top of the stairs. A silver a head, breakfast included.', 'Blue door and green door, top of the stairs. Mind the third step.']));
