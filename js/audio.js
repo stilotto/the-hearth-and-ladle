@@ -32,7 +32,15 @@ export const Sfx = {
     if (ctx) return;
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
+    // iOS: treat this like media playback so the silent switch doesn't mute it
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch { /* older Safari */ }
     ctx = new AC();
+    // iOS unlocks audio only for sound started inside a tap: play one silent sample now
+    const unlock = ctx.createBufferSource(); unlock.buffer = ctx.createBuffer(1, 1, 22050); unlock.connect(ctx.destination); unlock.start(0);
+    // iOS suspends audio when the page is backgrounded or a call comes in; wake it on the next touch
+    const wake = () => { if (this.on && ctx.state !== 'running') ctx.resume(); };
+    for (const ev of ['touchend', 'click', 'keydown']) window.addEventListener(ev, wake, true);
+    document.addEventListener('visibilitychange', wake);
     master = ctx.createGain(); master.gain.value = 0;
     master.connect(ctx.destination);
     noiseBuf = noiseBuffer();
@@ -52,7 +60,7 @@ export const Sfx = {
     this.on = v;
     if (v) this.init();
     if (!ctx) return;
-    if (v && ctx.state === 'suspended') ctx.resume();
+    if (v && ctx.state !== 'running') ctx.resume();
     master.gain.setTargetAtTime(v ? 0.8 : 0, ctx.currentTime, 0.3);
   },
   update(dt) {
