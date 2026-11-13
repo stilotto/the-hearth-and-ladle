@@ -30,12 +30,13 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color('#0a0705');
 scene.fog = new THREE.FogExp2('#1b120b', 0.03);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 60);
-const quality = { high: true, ratio: Math.min(window.devicePixelRatio || 1, 1.25) };
+// 2: shadows, bloom and haze; 1: bloom without shadows; 0: bare, for old phones
+const quality = { level: 2, ratio: Math.min(window.devicePixelRatio || 1, 1.25) };
 const fx = createFX(renderer);
 const rnd = Math.random, rf = (a, b) => a + rnd() * (b - a);
 
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight, ratio = quality.high ? quality.ratio : 0.7;
+  const w = window.innerWidth, h = window.innerHeight, ratio = quality.level === 2 ? quality.ratio : quality.level === 1 ? Math.min(quality.ratio, 1) : 0.7;
   renderer.setPixelRatio(ratio);
   renderer.setSize(w, h, false);
   fx.setSize(w, h, ratio);
@@ -51,7 +52,7 @@ const M = {
   ceil: new THREE.MeshStandardMaterial({ ...tex2(TX.planks(12, [24, 30, 16]), [6, 4], 0.6), roughness: 0.95, color: '#8a7a6a' }),
   plaster: new THREE.MeshStandardMaterial({ ...tex2(TX.plaster(), [1, 1], 0.25, 1), roughness: 0.95 }),
   reveal: new THREE.MeshStandardMaterial({ color: '#a89878', roughness: 0.95 }),
-  stone: new THREE.MeshStandardMaterial({ ...tex2(stoneC, [1.2, 1.4], 1.2, 1), roughness: 0.9 }),
+  stone: new THREE.MeshStandardMaterial({ ...tex2(stoneC, [1, 1], 1.2, 1), roughness: 0.9 }),
   flag: new THREE.MeshStandardMaterial({ ...tex2(flagC, [3, 4], 1, 1), roughness: 0.7 }),
   cobble: new THREE.MeshStandardMaterial({ ...tex2(TX.cobbles(), [6, 4], 1.2, 1), roughness: 0.45 }),
   beam: new THREE.MeshStandardMaterial({ color: '#3a2615', roughness: 0.9 }),
@@ -62,6 +63,8 @@ const M = {
   iron: new THREE.MeshStandardMaterial({ color: '#2a2a2a', roughness: 0.5, metalness: 0.7 }),
   wax: new THREE.MeshStandardMaterial({ color: '#efe6cf', roughness: 0.6, emissive: '#ffcc88', emissiveIntensity: 0.15 }),
 };
+
+M.stone.userData.wuv = 0.75; M.wood.userData.wuv = 0.3;
 
 // Everything that never moves is collected here and merged into a handful of
 // meshes once the room is built, so the firelight's shadows stay cheap.
@@ -82,7 +85,15 @@ function addGroup(g, cast = true) {
 }
 // box from min/max corners (x0,y0,z0)-(x1,y1,z1)
 function slab(x0, y0, z0, x1, y1, z1, m, o) {
-  return add(new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), m), (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, o);
+  const g = new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), k = m.userData.wuv;
+  if (k) {      // map by position in the room, so stone courses and planks keep their size on any block
+    const p = g.attributes.position, n = g.attributes.normal, uv = g.attributes.uv, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cz = (z0 + z1) / 2;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i) + cx, y = p.getY(i) + cy, z = p.getZ(i) + cz, ax = Math.abs(n.getX(i)), ay = Math.abs(n.getY(i)), az = Math.abs(n.getZ(i));
+      if (ay > ax && ay > az) uv.setXY(i, z * k, x * k); else if (ax > az) uv.setXY(i, z * k, y * k); else uv.setXY(i, x * k, y * k);
+    }
+  }
+  return add(new THREE.Mesh(g, m), (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, o);
 }
 function plane(w, h, m) { return new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); }
 function batchStatics() {
@@ -276,7 +287,7 @@ WIN.forEach((W, wi) => {
   for (let i = 1; i <= 22; i++) { const sl = plane(w * 1.05, hgt * 1.05, shaftMat); sl.position.set(0, -i * 0.076, i * 0.124); shaft.add(sl); }
   shaft.position.set(cx, cy, Z0); scene.add(shaft);
   const poolMat = new THREE.MeshBasicMaterial({ map: paneTex[wi], transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
-  const pool = plane(w * 1.1, 2.5, poolMat); pool.rotation.x = -Math.PI / 2; pool.position.set(cx, 0.012, Z0 + 3.05); scene.add(pool);
+  const pool = plane(w * 1.1, 2.5, poolMat); pool.rotation.x = -Math.PI / 2; pool.position.set(cx, 0.02, Z0 + 3.05); scene.add(pool);
   const r = mulberry(70 + wi * 13);
   let rx = -20; const roofs = [];
   while (rx < 256) { const bw = 34 + r() * 46; roofs.push({ x: rx, w: bw, h: 34 + r() * 44, pitch: 14 + r() * 16, chim: r() < 0.6 ? r() : -1, lit: Array.from({ length: 2 }, () => (r() < 0.55 ? [0.15 + r() * 0.6, 0.3 + r() * 0.4, r()] : null)) }); rx += bw + 2 + r() * 10; }
@@ -324,7 +335,67 @@ let rainOut, outsideMat, doorPool, laneGlow;
   g.fillStyle = gr; g.filter = 'blur(6px)'; g.fillRect(10, 0, 44, 128);
   const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace;
   doorPool = plane(2.0, 3.2, new THREE.MeshBasicMaterial({ map: tx, color: '#8fa4d0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-  doorPool.rotation.x = -Math.PI / 2; doorPool.position.set(13 * S, 0.013, Z1 - 1.6); scene.add(doorPool);
+  doorPool.rotation.x = -Math.PI / 2; doorPool.position.set(13 * S, 0.022, Z1 - 1.6); scene.add(doorPool);
+}
+
+// the inn from the lane: timber front, lit windows, a lantern and the sign over the door
+const frontMat = new THREE.MeshBasicMaterial({ fog: false, alphaTest: 0.5, transparent: false });
+const frontGlow = new THREE.MeshBasicMaterial({ fog: false, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false });
+const signMat = new THREE.MeshBasicMaterial({ fog: false, side: THREE.DoubleSide });
+const sign = new THREE.Group();
+let lanternPool;
+{
+  const FW = 16, FH = 6, PX = 64, cx = 13 * S;
+  const [c, g] = TX.canvas(FW * PX, FH * PX), [gc, gg] = TX.canvas(FW * PX / 2, FH * PX / 2);
+  const X = (m) => (m - (cx - FW / 2)) * PX, Y = (m) => (FH - m) * PX;
+  g.drawImage(TX.plaster(8), 0, 0, c.width, c.height);
+  g.fillStyle = 'rgba(40,30,20,.25)'; g.fillRect(0, 0, c.width, c.height);
+  g.fillStyle = '#4a4640'; g.fillRect(0, Y(0.5), c.width, 0.5 * PX);                     // stone footing
+  g.fillStyle = '#2c1c10';
+  for (let x = 0; x <= FW; x += 1.6) g.fillRect(x * PX - 7, 0, 14, c.height);
+  for (const y of [0.5, 2.5, 3.2, 5.9]) g.fillRect(0, Y(y) - 7, c.width, 14);
+  for (let x = 0; x < FW; x += 3.2) { g.save(); g.translate(x * PX + 51, Y(4.5)); g.rotate(0.6); g.fillRect(-6, -90, 12, 180); g.restore(); }
+  gg.fillStyle = '#000'; gg.fillRect(0, 0, gc.width, gc.height);
+  for (const wx of [5.6, 7.4, 13.4, 15.2]) {
+    g.fillStyle = '#2c1c10'; g.fillRect(X(wx) - 6, Y(2.3) - 6, 1.1 * PX + 12, 1.1 * PX + 12);
+    g.fillStyle = '#3a2a18'; g.fillRect(X(wx), Y(2.3), 1.1 * PX, 1.1 * PX);
+    const wg = gg.createRadialGradient(X(wx + 0.55) / 2, Y(1.7) / 2, 2, X(wx + 0.55) / 2, Y(1.75) / 2, 46);
+    wg.addColorStop(0, '#ffd088'); wg.addColorStop(0.6, '#e08a30'); wg.addColorStop(1, '#7a3a10');
+    gg.fillStyle = wg; gg.fillRect(X(wx) / 2, Y(2.3) / 2, 1.1 * PX / 2, 1.1 * PX / 2);
+    gg.fillStyle = '#000'; gg.fillRect(X(wx + 0.52) / 2, Y(2.3) / 2, 3, 1.1 * PX / 2); gg.fillRect(X(wx) / 2, Y(1.78) / 2, 1.1 * PX / 2, 3);
+    const hl = gg.createRadialGradient(X(wx + 0.55) / 2, Y(1.75) / 2, 20, X(wx + 0.55) / 2, Y(1.75) / 2, 70);
+    hl.addColorStop(0, 'rgba(255,160,70,.16)'); hl.addColorStop(1, 'rgba(255,160,70,0)');
+    gg.globalCompositeOperation = 'lighter'; gg.fillStyle = hl; gg.fillRect(X(wx - 1) / 2, Y(3.4) / 2, 3.1 * PX / 2, 3.2 * PX / 2); gg.globalCompositeOperation = 'source-over';
+  }
+  // the lantern by the door and the wash of light it throws on the wall
+  const lx = X(11.75) / 2, ly = Y(2.05) / 2;
+  const lg = gg.createRadialGradient(lx, ly, 1, lx, ly, 110); lg.addColorStop(0, 'rgba(255,215,150,1)'); lg.addColorStop(0.06, 'rgba(255,170,80,.6)'); lg.addColorStop(1, 'rgba(255,140,50,0)');
+  gg.globalCompositeOperation = 'lighter'; gg.fillStyle = lg; gg.fillRect(lx - 110, ly - 110, 220, 220);
+  g.fillStyle = '#1a1410'; g.fillRect(X(11.68), Y(2.25), 9, 26); g.fillRect(X(11.5), Y(2.28), 20, 4);
+  g.clearRect(X(12 * S), Y(2.2), 2 * S * PX, 2.2 * PX);                                  // the doorway
+  gg.fillStyle = '#000'; gg.globalCompositeOperation = 'source-over'; gg.fillRect(X(12 * S) / 2, Y(2.2) / 2, S * PX, 1.1 * PX);
+  const ft = new THREE.CanvasTexture(c); ft.colorSpace = THREE.SRGBColorSpace; ft.anisotropy = 4; frontMat.map = ft;
+  const gt = new THREE.CanvasTexture(gc); gt.colorSpace = THREE.SRGBColorSpace; frontGlow.map = gt;
+  const wallOut = plane(FW, FH, frontMat); wallOut.position.set(cx, FH / 2, Z1 + 0.3); scene.add(wallOut);
+  const glowOut = plane(FW, FH, frontGlow); glowOut.position.set(cx, FH / 2, Z1 + 0.31); scene.add(glowOut);
+  lanternPool = plane(4.2, 3.4, new THREE.MeshBasicMaterial({ map: TX.glowSprite(), color: '#ff9a48', transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+  lanternPool.rotation.x = -Math.PI / 2; lanternPool.position.set(11.4, 0.012, Z1 + 1.5); scene.add(lanternPool);
+  // the sign, swinging on its bracket
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, 1.0), M.iron); arm.position.set(9.1, 3.25, Z1 + 0.8); scene.add(arm);
+  const board = plane(1.5, 0.62, signMat); board.position.y = -0.4; sign.add(board);
+  sign.position.set(9.1, 3.22, Z1 + 0.85); scene.add(sign);
+}
+function paintSign() {
+  const [c, g] = TX.canvas(384, 160);
+  g.fillStyle = '#3a2412'; g.fillRect(0, 0, 384, 160);
+  g.strokeStyle = '#c9a24a'; g.lineWidth = 5; g.strokeRect(9, 9, 366, 142);
+  g.fillStyle = '#e8c45a'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  const words = lore.inn.split(' '), half = Math.ceil(words.length / 2), lines = lore.inn.length > 16 ? [words.slice(0, half).join(' '), words.slice(half).join(' ')] : [lore.inn];
+  let size = 54; g.font = `${size}px "IM Fell English SC", Georgia, serif`;
+  while (Math.max(...lines.map((l) => g.measureText(l).width)) > 330 && size > 20) { size -= 2; g.font = `${size}px "IM Fell English SC", Georgia, serif`; }
+  lines.forEach((l, i) => g.fillText(l, 192, 80 + (i - (lines.length - 1) / 2) * size * 1.05));
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  signMat.map?.dispose(); signMat.map = t; signMat.needsUpdate = true;
 }
 
 // the kitchen passage: its door stands open on firelight, steam and the clatter of pots
@@ -384,6 +455,14 @@ function seatYaw(s) {
     addGroup(g);
   }
 }
+// soft pools of shade under tables and chairs, so candle-lit furniture sits on the floor
+{
+  const ao = new THREE.MeshBasicMaterial({ map: TX.blobShadow(), transparent: true, depthWrite: false, opacity: 0.75 });
+  const dab = (x, z, w, d) => { const m = plane(w, d, ao); m.rotation.x = -Math.PI / 2; add(m, x, 0.009, z, { cast: false }); };
+  for (const t of tables) dab((t.x + t.w / 2) * S, (t.y + 0.5) * S, t.w * S + 0.9, 1.7);
+  for (const s of seats) dab((s.x + 0.5) * S, (s.y + 0.5) * S, 0.85, 0.85);
+  dab(19.5 * S, 5.5 * S, 1.6, 6.4); dab(21 * S, 8.5 * S, 4, 1.6); dab(24.5 * S, 5 * S, 1.4, 3.8);
+}
 const strawTex = TX.toTex(TX.plaster(6), [3, 2]);
 const props = buildProps({ scene, add, slab, addGroup, M, S, H, X0, X1, Z0, Z1, strawTex, windows });
 
@@ -411,7 +490,7 @@ function sprite(tex, s, color = '#ffffff', opacity = 1, o = {}) {
 }
 const hot = (hex, k = HDR) => new THREE.Color(hex).multiplyScalar(k);
 kitchenPool = plane(1.6, 2.2, new THREE.MeshBasicMaterial({ map: glowTex, color: '#ff9a48', transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-kitchenPool.rotation.x = -Math.PI / 2; kitchenPool.position.set(KITCHEN.x, 0.014, Z0 + 0.5); scene.add(kitchenPool);
+kitchenPool.rotation.x = -Math.PI / 2; kitchenPool.position.set(KITCHEN.x, 0.024, Z0 + 0.5); scene.add(kitchenPool);
 
 // fixture lights: candles, sconces, lanterns
 const lamps = [];
@@ -452,12 +531,36 @@ for (const f of fixtures) {
 }
 
 // the fire itself: flames, a bed of embers, sparks, and smoke drawn up the chimney
+const FIRE_FRAG = `
+uniform float time, fire, seed; varying vec2 vUv;
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1., 0.)), f.x), mix(hash(i + vec2(0., 1.)), hash(i + vec2(1., 1.)), f.x), f.y); }
+float fbm(vec2 p){ float a = .5, s = 0.; for (int i = 0; i < 4; i++) { s += a * noise(p); p = p * 2.03 + 7.1; a *= .5; } return s; }
+void main(){
+  vec2 uv = vUv; float x = (uv.x - .5) * 2.;
+  // separate tongues: the height of the flame wanders along the logs
+  float h = (.22 + .7 * fire) * (.45 + .85 * noise(vec2(uv.x * 3.2 + seed, time * .9 + seed)));
+  float n = fbm(vec2(uv.x * 4.5 + seed, uv.y * 3.2 - time * 1.9));
+  float n2 = fbm(vec2(uv.x * 9. - seed, uv.y * 7. - time * 3.1));
+  float lick = uv.x + (n2 - .5) * .25 * uv.y;
+  float body = 1. - smoothstep(.55, 1., abs((lick - .5) * 2.) * (1. + uv.y * .9));
+  float f = body * (1. - uv.y / h) + (n - .5) * 1.3 * (.25 + uv.y * 2.2) + (n2 - .5) * .45;
+  f = clamp(f * 1.25, 0., 1.) * smoothstep(0., .05, uv.y) * body;
+  vec3 col = mix(vec3(.9, .12, .01), vec3(1., .5, .08), smoothstep(.15, .55, f));
+  col = mix(col, vec3(1., .8, .42), smoothstep(.65, 1., f));
+  gl_FragColor = vec4(col * f * f * 0.5, 1.);
+  #include <tonemapping_fragment>
+  #include <colorspace_fragment>
+}`;
 const flames = [];
-for (let i = 0; i < 22; i++) {
-  const sp = sprite(flameTex, 0.4, hot(i % 3 === 0 ? '#ffd080' : '#ff7a2a', i % 3 === 0 ? 2 : 1.6), 0.85);
-  sp.center.set(0.5, 0.05);
-  sp.userData = { x: (Math.random() - 0.5) * 0.9, z: (Math.random() - 0.5) * 0.25, ph: Math.random() * 10, sp: 5 + Math.random() * 6 };
-  scene.add(sp); flames.push(sp);
+for (const [dz, w, sd] of [[-0.14, 1.5, 1.7], [0, 1.35, 5.3], [0.13, 1.2, 9.1]]) {
+  const m = new THREE.ShaderMaterial({
+    uniforms: { time: { value: 0 }, fire: { value: 0.8 }, seed: { value: sd } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
+    fragmentShader: FIRE_FRAG, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const f = plane(w, 1.45, m); f.position.set(HEARTH.x, 0.14 + 0.725, HEARTH.z + dz); scene.add(f); flames.push(m);
 }
 const fireGlow = sprite(glowTex, 2.8, '#ff9040', 0.5); fireGlow.position.set(8.0, 0.55, 2.3); scene.add(fireGlow);
 const embers = plane(1.25, 0.5, new THREE.MeshBasicMaterial({ map: glowTex, color: hot('#ff4a12', 2.2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
@@ -590,7 +693,7 @@ function syncPeople(dt, t) {
       B.tail.rotation.x = sit ? -0.6 : 0.3;
       B.legs.forEach((l, i) => { l.visible = !sleep; l.rotation.x = moving ? Math.sin(a.walkPhase * Math.PI + i * Math.PI) * 0.6 : 0; });
       if (a.sitting === false && a.pose === 'sit' && tile === 'seat') B.root.position.y = 0.47;
-      B.blob.position.set(X, B.root.position.y + 0.012, Z); B.blob.scale.set(0.5, 0.5, 1);
+      B.blob.position.set(X, B.root.position.y + 0.016, Z); B.blob.scale.set(0.5, 0.5, 1);
       life.cat = B.root.position;
       continue;
     }
@@ -760,7 +863,7 @@ function syncPeople(dt, t) {
       else { p.x += (j.x - p.x) * k; p.y += (j.y - p.y) * k; p.z += (j.z - p.z) * k; j.set(p.x, p.y, p.z); }
     }
     B.fresh = false;
-    B.blob.position.set(B.root.position.x, elev + 0.012, B.root.position.z);
+    B.blob.position.set(B.root.position.x, elev + 0.016, B.root.position.z);
     const bs = (a.sitting ? 0.95 : 0.7) * sc; B.blob.scale.set(bs, bs, 1);
 
     // steam from a bowl, smoke from a pipe
@@ -787,7 +890,9 @@ function syncTable() {
 }
 
 // ------------------------------------------------------------------ you
-const player = { x: 15.5 * S, z: 13.2 * S, yaw: 0.62, pitch: -0.08, bob: 0, elev: 0, vx: 0, vz: 0, sit: null, eye: 1.62, back: null, stepI: 0, lean: 0 };
+const ARRIVE = !G.reduced;
+const player = ARRIVE ? { x: 13 * S, z: Z1 + 3.4, yaw: 0, pitch: 0.16, intro: -1,
+  bob: 0, elev: 0, vx: 0, vz: 0, sit: null, eye: 1.62, back: null, stepI: 0, lean: 0 } : { x: 15.5 * S, z: 13.2 * S, yaw: 0.62, pitch: -0.08, intro: null, bob: 0, elev: 0, vx: 0, vz: 0, sit: null, eye: 1.62, back: null, stepI: 0, lean: 0 };
 const keys = new Set();
 // your own shadow, thrown across the boards by the fire
 const shade = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 1.1, 3, 8), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
@@ -831,6 +936,18 @@ function toggleSit() {
   if (!s) return;
   player.back = { x: player.x, z: player.z }; player.sit = s; s.reserved = player; player.vx = player.vz = 0;
   sound.scrape(player);
+}
+// arriving: a moment in the lane under the sign, then the door opens and you walk in
+function arrive(dt) {
+  const u = (player.intro += dt);
+  life.hold = u > 0.4;
+  const k = clamp((u - 1.5) / 3.6, 0, 1), e = k * k * (3 - 2 * k);
+  const z = lerp(Z1 + 3.4, Z1 - 1.6, e);
+  player.bob += Math.abs(z - player.z) * 3.6; player.z = z;
+  if (k > 0 && k < 1) player.pitch += (-0.04 - player.pitch) * Math.min(1, dt * 1.2);
+  const si = Math.floor(player.bob / Math.PI);
+  if (si !== player.stepI) { player.stepI = si; sound.step(null, z > Z1 + 0.2 ? 'flag' : 'wood', 0.9); }
+  if (u > 5.6) { player.intro = null; life.hold = false; }
 }
 function movePlayer(dt) {
   let f = 0, s = 0;
@@ -929,8 +1046,8 @@ function enter(withSound) {
   $('#intro').hidden = true;
   entered = true;
   G.paused = false;
+  if (player.intro != null) player.intro = 0;
   if (withSound) startAudio();
-  if (withSound && Sfx.on) setTimeout(() => Sfx.door(), 60);
   if (!matchMedia('(pointer: coarse)').matches) canvas.requestPointerLock?.()?.catch?.(() => {});
   setTimeout(() => $('#hint').classList.add('gone'), 14000);
 }
@@ -951,7 +1068,7 @@ window.addEventListener('keydown', (e) => {
   keys.add(e.code);
   if (e.repeat) return;
   if (e.code === 'KeyM') { if (!sound.on) startAudio(); else Sfx.setOn(!Sfx.on); }
-  if (e.code === 'KeyQ') { quality.high = !quality.high; applyQuality(); toast(quality.high ? 'High quality' : 'Low quality: faster on older machines'); }
+  if (e.code === 'KeyQ') { quality.level = (quality.level + 2) % 3; autoQ = true; applyQuality(); toast(['Low quality: fastest', 'Medium quality: no shadows', 'High quality'][quality.level]); }
   if (e.code === 'KeyE' && entered) toggleSit();
   if (e.code === 'Space') { e.preventDefault(); G.paused = !G.paused; }
 });
@@ -986,10 +1103,10 @@ canvas.addEventListener('touchend', touchEnd);
 canvas.addEventListener('touchcancel', touchEnd);
 
 function applyQuality() {
-  renderer.shadowMap.enabled = quality.high;
-  fireLight.castShadow = quality.high;
-  fx.enabled = quality.high;
-  for (const h of haze) h.visible = quality.high;
+  renderer.shadowMap.enabled = quality.level === 2;
+  fireLight.castShadow = quality.level === 2;
+  fx.enabled = quality.level >= 1;
+  for (const h of haze) h.visible = quality.level >= 1;
   scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
   resize();
 }
@@ -1009,6 +1126,7 @@ function lookTarget() {
 }
 
 // ------------------------------------------------------------------ frame
+let fireClock = 0, expo = 1.3;
 let last = performance.now(), fpsT = 0, fpsN = 0, autoQ = /[?&]hq\b/.test(location.search), uiT = 0, kick = 0, doorWas = false;
 const nightTint = new THREE.Color(), tmpC = new THREE.Color();
 function frame(nowMs) {
@@ -1020,7 +1138,7 @@ function frame(nowMs) {
     while (sdt > 0) { const s = Math.min(0.25, sdt); update(s); sdt -= s; }
   }
   G.particles.length = 0;       // the 2D view's sparks and notes; this room draws its own
-  if (entered) { movePlayer(dt); if (!G.paused) greetings(dt); }
+  if (entered) { if (player.intro != null) arrive(dt); else { movePlayer(dt); if (!G.paused) greetings(dt); } }
   G.sel = null;
   G.ear = { x: m2px(player.x), y: m2px(player.z) - 3 };
 
@@ -1061,10 +1179,14 @@ function frame(nowMs) {
   const open = clamp(-door.rotation.y / 1.5, 0, 1);
   if (near && !doorWas) life.doorT = 2.6;
   doorWas = near; life.doorT -= dt;
-  outsideMat.color.setRGB(0.16 + sky.day * 0.9 + flash, 0.19 + sky.day * 0.85 + flash, 0.3 + sky.day * 0.7 + flash);
+  outsideMat.color.setRGB(0.2 + sky.day * 1.1 + flash, 0.23 + sky.day * 1.05 + flash, 0.34 + sky.day * 0.9 + flash);
   laneGlow.color.setScalar((1 - sky.day) * 1.6);
   doorPool.material.opacity = open * (0.1 + sky.day * 0.5 + moon * 0.12 + flash);
-  rainOut.visible = !clear && open > 0.03;
+  rainOut.visible = !clear && (open > 0.03 || player.z > Z1);
+  const outC = outsideMat.color;
+  frontMat.color.copy(outC); signMat.color.setRGB(outC.r + 0.25 * (1 - sky.day), outC.g + 0.18 * (1 - sky.day), outC.b);
+  frontGlow.color.setScalar(0.25 + (1 - sky.day) * 1.5); lanternPool.material.opacity = 0.12 + 0.4 * (1 - sky.day);
+  sign.rotation.x = G.reduced ? 0 : Math.sin(t * 1.1) * (0.03 + (sound.gust || 0) * (storm ? 0.3 : 0.08));
   if (rainOut.visible) {
     const arr = rainOut.geometry.attributes.position.array, d = rainOut.userData.d;
     for (let i = 0; i < d.length; i++) {
@@ -1083,15 +1205,10 @@ function frame(nowMs) {
   fireLight.intensity = (12 + 26 * fire) * flick;
   fireLight.position.x = 8.0 + (G.reduced ? 0 : Math.sin(t * 7) * 0.05 + Math.sin(t * 13.1) * 0.03);
   fireLight.position.y = 0.7 + (G.reduced ? 0 : Math.sin(t * 9.3) * 0.04);
-  fireGlow.material.opacity = 0.3 + 0.35 * fire * flick;
+  fireGlow.material.opacity = 0.16 + 0.2 * fire * flick;
   embers.material.opacity = clamp(0.5 + 0.4 * fire + (G.reduced ? 0 : 0.15 * Math.sin(t * 2.1) + 0.1 * Math.sin(t * 3.7)), 0, 1);
-  for (const f of flames) {
-    const u = f.userData, kk = (t * 0.8 + u.ph) % 1;
-    const hgt = (0.35 + 0.55 * fire) * (1 - kk * 0.6) * (0.8 + 0.3 * Math.sin(t * u.sp + u.ph));
-    f.scale.set(hgt * 0.55, hgt, 1);
-    f.position.set(HEARTH.x + u.x * (0.7 + 0.3 * fire) + Math.sin(t * 3 + u.ph) * 0.03, 0.18, HEARTH.z + u.z);
-    f.material.opacity = 0.55 + 0.35 * Math.sin(t * u.sp + u.ph);
-  }
+  fireClock += dt * (G.reduced ? 0.12 : 1);
+  for (const f of flames) { f.uniforms.time.value = fireClock; f.uniforms.fire.value = clamp(fire + kick * 0.5, 0, 1.4); }
   const sp = sparkGeo.attributes.position.array;
   for (let i = 0; i < SPARKS; i++) {
     sparkLife[i] += dt * (0.35 + fire * 0.5);
@@ -1131,7 +1248,7 @@ function frame(nowMs) {
     l.on += ((lit ? 1 : 0) - l.on) * Math.min(1, dt * (lit ? 2.5 : 8));
     const amp = 1 + draft * 3.5;
     const fl = G.reduced ? 1 : Math.max(0.35, 1 + amp * (0.1 * Math.sin(t * 13 + l.phase) + 0.05 * Math.sin(t * 23 + l.phase)));
-    l.light.intensity = l.base * l.on * (quality.high ? fl : 0.7);
+    l.light.intensity = l.base * l.on * fl;
     l.fl.visible = l.gl.visible = l.on > 0.02;
     l.fl.scale.set(0.05 * fl * l.on, 0.09 * fl * l.on, 1);
     l.fl.material.rotation = G.reduced ? 0 : Math.sin(t * 9 + l.phase) * 0.12 * amp - draft * 0.3;
@@ -1146,6 +1263,13 @@ function frame(nowMs) {
   Sfx.update(dt);
   if (fadeT < 1 && entered) fadeT = Math.min(1, fadeT + dt / (G.reduced ? 0.01 : 2.2));
   fx.uniforms.fade.value = fadeT * fadeT * (3 - 2 * fadeT);
+  {
+    const fdx = HEARTH.x - camera.position.x, fdz = HEARTH.z - camera.position.z, fd = Math.hypot(fdx, fdz) || 1;
+    const facing = Math.max(0, (camDir.x * fdx + camDir.z * fdz) / fd);
+    const glare = facing * facing * clamp(1.15 - fd / 9, 0.2, 1) * clamp(fire, 0, 1);
+    expo += (1.52 - 0.5 * glare - 0.22 * sky.day - expo) * Math.min(1, dt * 0.9);
+    fx.uniforms.exposure.value = expo;
+  }
   fx.uniforms.grain.value = G.reduced ? 0.015 : 0.035;
   fx.render(scene, camera, t, !G.reduced);
 
@@ -1161,10 +1285,16 @@ function frame(nowMs) {
     if (can) act.textContent = player.sit ? 'Stand up' : 'Sit down';
     renderCaptions();
   }
-  // drop to low quality automatically if the machine is struggling
+  // step quality down if the machine is struggling: ignore the first seconds (shaders
+  // compiling, textures uploading), then judge four seconds at a time, at most twice
   if (entered && !autoQ) {
-    fpsT += dt; fpsN++;
-    if (fpsT > 4) { autoQ = true; if (fpsN / fpsT < 28 && quality.high) { quality.high = false; applyQuality(); toast('Switched to low quality to keep things smooth. Press Q to switch back.'); } }
+    fpsT += dt;
+    if (fpsT > 3) fpsN++;
+    if (fpsT > 7) {
+      const fps = fpsN / 4; fpsT = 3; fpsN = 0;
+      if (fps < 27 && quality.level > 0) { quality.level--; applyQuality(); toast(quality.level ? 'Shadows off to keep things smooth. Press Q to change quality.' : 'Switched to low quality to keep things smooth. Press Q to change it.'); if (!quality.level) autoQ = true; }
+      else autoQ = true;
+    }
   }
   requestAnimationFrame(frame);
 }
@@ -1237,6 +1367,8 @@ function drawWindow(w, sky, h, t, dt) {
 }
 
 // ------------------------------------------------------------------ go
+paintSign();
+document.fonts?.ready.then(paintSign);
 createCast();
 startDay(1);
 G.paused = true;
