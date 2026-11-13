@@ -42,7 +42,9 @@ export const Sfx = {
     for (const ev of ['touchend', 'click', 'keydown']) window.addEventListener(ev, wake, true);
     document.addEventListener('visibilitychange', wake);
     master = ctx.createGain(); master.gain.value = 0;
-    master.connect(ctx.destination);
+    // a gentle limiter so a thunderclap over a full room never clips
+    const comp = ctx.createDynamicsCompressor(); comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.25;
+    master.connect(comp).connect(ctx.destination);
     noiseBuf = noiseBuffer();
     fireG = ctx.createGain(); fireG.gain.value = 0; fireG.connect(master);
     rainG = ctx.createGain(); rainG.gain.value = 0; rainG.connect(master);

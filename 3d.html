@@ -23,12 +23,17 @@
   #look { left: 50%; top: calc(50% + 18px); transform: translateX(-50%); text-align: center; text-shadow: 0 1px 4px #000; }
   #look b { display: block; font-weight: normal; font-family: "IM Fell English SC", serif; font-size: 17px; }
   #look span { font-size: 13px; color: var(--dim); font-style: italic; }
-  #captions { left: 50%; bottom: 64px; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); text-align: center; }
+  #captions { left: 50%; bottom: 88px; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); text-align: center; }
   #captions p { margin: 4px auto; display: table; background: #0d0806b8; padding: 4px 12px; border-radius: 4px; font-size: 18px; text-shadow: 0 1px 2px #000; }
   #captions p.whisper { font-style: italic; color: #d8b8ff; }
   #captions b { font-weight: normal; font-family: "IM Fell English SC", serif; margin-right: 4px; }
   #hint { left: 50%; bottom: 16px; transform: translateX(-50%); font-size: 13px; color: var(--dim); text-shadow: 0 1px 3px #000; white-space: nowrap; transition: opacity .6s; }
   #hint.dim { opacity: .45; }
+  #hint.gone { opacity: 0; transition: opacity 3s; }
+  #act { left: 50%; bottom: 44px; transform: translateX(-50%); pointer-events: auto; font: inherit; font-size: 13px; color: var(--dim); background: #1c120a99; border: 1px solid #5a3d2488; border-radius: 14px; padding: 3px 12px; cursor: pointer; }
+  #act[hidden] { display: none; }
+  #act kbd { font: inherit; color: var(--gold); margin-right: 6px; }
+  @media (pointer: coarse) { #act { bottom: 120px; padding: 10px 20px; } }
   #toasts { right: 16px; top: 52px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; max-width: 340px; }
   .toast { background: #1c120ad0; border: 1px solid var(--line); padding: 5px 12px; border-radius: 14px; font-size: 14px; }
   .sheet-wrap { position: fixed; inset: 0; display: grid; place-items: center; background: #0a0604c0; padding: 16px; backdrop-filter: blur(2px); }
@@ -58,7 +63,8 @@
 <div id="captions" class="hud" aria-live="polite"></div>
 <div id="toasts" class="hud"></div>
 <div id="stick" class="hud" hidden><i></i></div>
-<div id="hint" class="hud">WASD to walk · mouse to look · Shift to hurry · hold F to let time pass · M sound · Q quality · Esc frees the mouse</div>
+<button id="act" class="hud" hidden>Sit down</button>
+<div id="hint" class="hud">WASD to walk · mouse to look · Shift to hurry · E to sit · hold F to let time pass · M sound · Q quality</div>
 
 <div id="intro" class="sheet-wrap">
   <div class="sheet">
@@ -67,10 +73,10 @@
     <ul>
       <li>Walk up to people to hear what they're saying. Their words appear as captions.</li>
       <li class="touchonly">On a phone: drag on the left half to walk, drag on the right half to look around. Turn it sideways for the best view.</li>
-      <li>Look at someone to see who they are and what they're doing.</li>
+      <li>Look at someone to see who they are and what they're doing. Pull up an empty chair and sit a while.</li>
       <li>Stay till dusk and the pot-boy lights the candles one by one.</li>
     </ul>
-    <p class="small">The same people, routines and secrets as the 2D room, seen from inside. Headphones help: the fire, the rain and the bard all come from where they are.</p>
+    <p class="small">The same people, routines and secrets as the 2D room, seen from inside. Headphones help: the fire, the rain, the bard and every voice come from where they are.</p>
     <div class="btns"><button id="enterSound" class="primary">Step inside, with sound</button><button id="enterQuiet">Step inside quietly</button></div>
   </div>
 </div>

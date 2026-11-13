@@ -3,12 +3,15 @@
 import * as THREE from '../../vendor/three.module.min.js';
 import { G, on } from '../state.js';
 import { TS, kind, cost, tables, seats, fixtures, lore } from '../world.js';
-import { createCast, startDay, update } from '../sim.js';
+import { createCast, startDay, update, speak } from '../sim.js';
 import { Sfx } from '../audio.js';
 import { skyAt } from '../render.js';
 import { fmtTime, hourOf, clamp, lerp, mulberry } from '../util.js';
 import * as TX from './tex.js';
 import { makePerson, makeCat, makeItem, mat } from './people.js';
+import { createFX } from './fx.js';
+import { createSound } from './sound.js';
+import { buildProps } from './props.js';
 
 const S = 0.8;            // metres per tile
 const H = 3.4;            // ceiling height
@@ -20,81 +23,148 @@ const canvas = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.4;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.type = THREE.PCFShadowMap;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#0a0705');
 scene.fog = new THREE.FogExp2('#1b120b', 0.03);
 const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 60);
 const quality = { high: true, ratio: Math.min(window.devicePixelRatio || 1, 1.25) };
+const fx = createFX(renderer);
+const rnd = Math.random, rf = (a, b) => a + rnd() * (b - a);
 
 function resize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setPixelRatio(quality.high ? quality.ratio : 0.7);
+  const w = window.innerWidth, h = window.innerHeight, ratio = quality.high ? quality.ratio : 0.7;
+  renderer.setPixelRatio(ratio);
   renderer.setSize(w, h, false);
+  fx.setSize(w, h, ratio);
   camera.aspect = w / h; camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
 
 // ------------------------------------------------------------------ materials
-const floorTex = TX.toTex(TX.planks(11), [19.2 / 2.4, 10.4 / 2.4]);
-const ceilTex = TX.toTex(TX.planks(12, [24, 30, 16]), [6, 4]);
-const plasterTex = TX.toTex(TX.plaster(), [12, 2.2]);
-const stoneTex = TX.toTex(TX.stone(5), [1.2, 1.4]);
-const flagTex = TX.toTex(TX.flagstone(), [3, 4]);
-const woodTex = TX.toTex(TX.planks(13, [24, 40, 30]), [1, 1]);
+const tex2 = (c, rep, bump = 0.02, blur = 0) => ({ map: TX.toTex(c, rep), bumpMap: TX.bumpOf(c, rep, blur), bumpScale: bump });
+const plankC = TX.planks(11), stoneC = TX.stone(5), flagC = TX.flagstone(), woodC = TX.planks(13, [24, 40, 30]);
 const M = {
-  floor: new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.82 }),
-  ceil: new THREE.MeshStandardMaterial({ map: ceilTex, roughness: 0.95, color: '#8a7a6a' }),
-  plaster: new THREE.MeshStandardMaterial({ map: plasterTex, roughness: 0.95 }),
-  stone: new THREE.MeshStandardMaterial({ map: stoneTex, roughness: 0.9 }),
-  flag: new THREE.MeshStandardMaterial({ map: flagTex, roughness: 0.8 }),
+  floor: new THREE.MeshStandardMaterial({ ...tex2(plankC, [19.2 / 2.4, 10.4 / 2.4], 0.7), roughness: 0.6 }),
+  ceil: new THREE.MeshStandardMaterial({ ...tex2(TX.planks(12, [24, 30, 16]), [6, 4], 0.6), roughness: 0.95, color: '#8a7a6a' }),
+  plaster: new THREE.MeshStandardMaterial({ ...tex2(TX.plaster(), [1, 1], 0.25, 1), roughness: 0.95 }),
+  reveal: new THREE.MeshStandardMaterial({ color: '#a89878', roughness: 0.95 }),
+  stone: new THREE.MeshStandardMaterial({ ...tex2(stoneC, [1.2, 1.4], 1.2, 1), roughness: 0.9 }),
+  flag: new THREE.MeshStandardMaterial({ ...tex2(flagC, [3, 4], 1, 1), roughness: 0.7 }),
+  cobble: new THREE.MeshStandardMaterial({ ...tex2(TX.cobbles(), [6, 4], 1.2, 1), roughness: 0.45 }),
   beam: new THREE.MeshStandardMaterial({ color: '#3a2615', roughness: 0.9 }),
-  wood: new THREE.MeshStandardMaterial({ map: woodTex, roughness: 0.7 }),
+  wood: new THREE.MeshStandardMaterial({ ...tex2(woodC, [1, 1], 0.6), roughness: 0.7 }),
   dark: new THREE.MeshStandardMaterial({ color: '#4a2f1b', roughness: 0.75 }),
-  top: new THREE.MeshStandardMaterial({ color: '#6e4a2a', roughness: 0.45 }),
+  top: new THREE.MeshStandardMaterial({ color: '#6e4a2a', roughness: 0.4 }),
   soot: new THREE.MeshStandardMaterial({ color: '#120c08', roughness: 1 }),
   iron: new THREE.MeshStandardMaterial({ color: '#2a2a2a', roughness: 0.5, metalness: 0.7 }),
   wax: new THREE.MeshStandardMaterial({ color: '#efe6cf', roughness: 0.6, emissive: '#ffcc88', emissiveIntensity: 0.15 }),
 };
 
+// Everything that never moves is collected here and merged into a handful of
+// meshes once the room is built, so the firelight's shadows stay cheap.
+const statics = [];
 function add(mesh, x, y, z, o = {}) {
   mesh.position.set(x, y, z);
   if (o.cast !== false) mesh.castShadow = true;
   mesh.receiveShadow = true;
   if (o.ry) mesh.rotation.y = o.ry;
   (o.parent || scene).add(mesh);
+  if (!o.dyn) statics.push(mesh);
   return mesh;
+}
+function addGroup(g, cast = true) {
+  scene.add(g);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = cast; o.receiveShadow = true; statics.push(o); } });
+  return g;
 }
 // box from min/max corners (x0,y0,z0)-(x1,y1,z1)
 function slab(x0, y0, z0, x1, y1, z1, m, o) {
   return add(new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), m), (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, o);
 }
 function plane(w, h, m) { return new THREE.Mesh(new THREE.PlaneGeometry(w, h), m); }
+function batchStatics() {
+  scene.updateMatrixWorld(true);
+  const groups = new Map();
+  for (const m of statics) {
+    if (!m.parent) continue;
+    const key = m.material.uuid + (m.castShadow ? 'c' : '-') + (m.receiveShadow ? 'r' : '-');
+    let g = groups.get(key);
+    if (!g) groups.set(key, g = { m, pos: [], nor: [], uv: [] });
+    const geo = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+    geo.applyMatrix4(m.matrixWorld);
+    g.pos.push(geo.attributes.position.array); g.nor.push(geo.attributes.normal.array); g.uv.push(geo.attributes.uv.array);
+    m.removeFromParent(); m.geometry.dispose(); geo.dispose();
+  }
+  const cat = (list) => { const out = new Float32Array(list.reduce((n, a) => n + a.length, 0)); let o = 0; for (const a of list) { out.set(a, o); o += a.length; } return out; };
+  for (const g of groups.values()) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(cat(g.pos), 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(cat(g.nor), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(cat(g.uv), 2));
+    const mesh = new THREE.Mesh(geo, g.m.material);
+    mesh.castShadow = g.m.castShadow; mesh.receiveShadow = g.m.receiveShadow;
+    scene.add(mesh);
+  }
+  statics.length = 0;
+}
 
 // ------------------------------------------------------------------ the room
 const X0 = S, X1 = 25 * S, Z0 = 2 * S, Z1 = 15 * S;
+const WIN = [[3 * S, 5 * S], [14 * S, 17 * S]].map(([x0, x1]) => ({ w: x1 - x0 - 0.2, hgt: 1.3, cx: (x0 + x1) / 2, cy: 1.85 }));
+const KX0 = 22 * S + 0.05, KX1 = 23 * S - 0.05, RECESS = 0.24;
+// A wall with openings cut in it; plaster is mapped once floor to ceiling so the smoke stain sits at the top.
+function wall(side, holes = []) {
+  const horiz = side === 'back' || side === 'front';
+  const a0 = horiz ? X0 : Z0, a1 = horiz ? X1 : Z1;
+  const rects = [];
+  let cur = a0;
+  for (const h of [...holes].sort((p, q) => p.a - q.a)) {
+    rects.push([cur, h.a, 0, H]);
+    if (h.y0 > 0) rects.push([h.a, h.b, 0, h.y0]);
+    rects.push([h.a, h.b, h.y1, H]);
+    cur = h.b;
+  }
+  rects.push([cur, a1, 0, H]);
+  for (const [u0, u1, y0, y1] of rects) {
+    if (u1 - u0 < 0.001 || y1 - y0 < 0.001) continue;
+    const g = new THREE.PlaneGeometry(u1 - u0, y1 - y0);
+    const uv = g.attributes.uv, mid = (u0 + u1) / 2;
+    for (let i = 0; i < uv.count; i++) {
+      const lx = g.attributes.position.getX(i) * (side === 'front' || side === 'left' ? -1 : 1), ly = g.attributes.position.getY(i);
+      uv.setXY(i, (mid + lx) / 2.6, ((y0 + y1) / 2 + ly) / H);
+    }
+    const m = new THREE.Mesh(g, M.plaster);
+    if (side === 'back') add(m, mid, (y0 + y1) / 2, Z0, { cast: false });
+    else if (side === 'front') add(m, mid, (y0 + y1) / 2, Z1, { cast: false, ry: Math.PI });
+    else if (side === 'left') add(m, X0, (y0 + y1) / 2, mid, { cast: false, ry: Math.PI / 2 });
+    else add(m, X1, (y0 + y1) / 2, mid, { cast: false, ry: -Math.PI / 2 });
+  }
+}
 {
   const f = plane(X1 - X0, Z1 - Z0, M.floor); f.rotation.x = -Math.PI / 2; add(f, (X0 + X1) / 2, 0, (Z0 + Z1) / 2, { cast: false });
   const fl = plane(5 * S, 6 * S, M.flag); fl.rotation.x = -Math.PI / 2; add(fl, 22.5 * S, 0.004, 5 * S, { cast: false });
   const fl2 = plane(2 * S, S, M.flag); fl2.rotation.x = -Math.PI / 2; add(fl2, 24 * S, 0.004, 8.5 * S, { cast: false });
   const c = plane(X1 - X0, Z1 - Z0, M.ceil); c.rotation.x = Math.PI / 2; add(c, (X0 + X1) / 2, H, (Z0 + Z1) / 2, { cast: false });
-  // walls
-  const back = plane(X1 - X0, H, M.plaster); add(back, (X0 + X1) / 2, H / 2, Z0, { cast: false });
-  const front = plane(X1 - X0, H, M.plaster); front.rotation.y = Math.PI; add(front, (X0 + X1) / 2, H / 2, Z1, { cast: false });
-  const left = plane(Z1 - Z0, H, M.plaster); left.rotation.y = Math.PI / 2; add(left, X0, H / 2, (Z0 + Z1) / 2, { cast: false });
-  const right = plane(Z1 - Z0, H, M.plaster); right.rotation.y = -Math.PI / 2; add(right, X1, H / 2, (Z0 + Z1) / 2, { cast: false });
+  wall('back', [...WIN.map((w) => ({ a: w.cx - w.w / 2, b: w.cx + w.w / 2, y0: w.cy - w.hgt / 2, y1: w.cy + w.hgt / 2 })), { a: KX0, b: KX1, y0: 0, y1: 2.1 }]);
+  wall('front', [{ a: 12 * S, b: 14 * S, y0: 0, y1: 2.2 }]);
+  wall('left'); wall('right');
   // timber framing
-  for (let x = X0 + 0.1; x < X1; x += 2.4) { slab(x - 0.1, 0, Z0, x + 0.1, H, Z0 + 0.12, M.beam); slab(x - 0.1, 0, Z1 - 0.12, x + 0.1, H, Z1, M.beam); }
+  const inWin = (x) => WIN.some((w) => Math.abs(x - w.cx) < w.w / 2 + 0.1) || (x > KX0 - 0.1 && x < KX1 + 0.1);
+  for (let x = X0 + 0.1; x < X1; x += 2.4) { if (!inWin(x)) slab(x - 0.1, 0, Z0, x + 0.1, H, Z0 + 0.12, M.beam); if (x < 12 * S - 0.2 || x > 14 * S + 0.2) slab(x - 0.1, 0, Z1 - 0.12, x + 0.1, H, Z1, M.beam); }
   for (let z = Z0 + 2.4; z < Z1; z += 2.4) { slab(X0, 0, z - 0.1, X0 + 0.12, H, z + 0.1, M.beam); slab(X1 - 0.12, 0, z - 0.1, X1, H, z + 0.1, M.beam); }
-  for (const [a, b] of [[Z0, Z0 + 0.14], [Z1 - 0.14, Z1]]) { slab(X0, H - 0.25, a, X1, H, b, M.beam); slab(X0, 0, a, X1, 0.18, b, M.beam); slab(X0, 1.0, a, X1, 1.08, b, M.beam); }
-  for (const [a, b] of [[X0, X0 + 0.14], [X1 - 0.14, X1]]) { slab(a, H - 0.25, Z0, b, H, Z1, M.beam); slab(a, 0, Z0, b, 0.18, Z1, M.beam); slab(a, 1.0, Z0, b, 1.08, Z1, M.beam); }
+  // rails along the walls, broken where a doorway or window cuts through
+  const rail = (y0, y1, zA, zB, gaps) => { let cur = X0; for (const [a, b] of [...gaps, [X1, X1]]) { if (a > cur) slab(cur, y0, zA, a, y1, zB, M.beam, { cast: false }); cur = Math.max(cur, b); } };
+  rail(H - 0.25, H, Z0, Z0 + 0.14, []); rail(0, 0.18, Z0, Z0 + 0.14, [[KX0, KX1]]); rail(1.0, 1.08, Z0, Z0 + 0.14, [[KX0, KX1]]);
+  rail(H - 0.25, H, Z1 - 0.14, Z1, []); rail(0, 0.18, Z1 - 0.14, Z1, [[12 * S, 14 * S]]); rail(1.0, 1.08, Z1 - 0.14, Z1, [[12 * S, 14 * S]]);
+  for (const [a, b] of [[X0, X0 + 0.14], [X1 - 0.14, X1]]) { slab(a, H - 0.25, Z0, b, H, Z1, M.beam, { cast: false }); slab(a, 0, Z0, b, 0.18, Z1, M.beam, { cast: false }); slab(a, 1.0, Z0, b, 1.08, Z1, M.beam, { cast: false }); }
   // ceiling beams
   for (let x = X0 + 1.2; x < X1; x += 2.4) slab(x - 0.14, H - 0.36, Z0, x + 0.14, H, Z1, M.beam);
   slab(X0, H - 0.5, 7 * S - 0.2, X1, H - 0.34, 7 * S + 0.2, M.beam);
   // stairwell opening
-  const hole = plane(2 * S, 2.5 * S, new THREE.MeshBasicMaterial({ color: '#050302' })); hole.rotation.x = Math.PI / 2; add(hole, X0 + S, H - 0.01, 6.25 * S, { cast: false });
+  const hole = plane(2 * S, 2.5 * S, new THREE.MeshBasicMaterial({ color: '#050302' })); hole.rotation.x = Math.PI / 2; add(hole, X0 + S, H - 0.01, 6.25 * S, { cast: false, dyn: true });
 }
 
 // hearth
@@ -111,9 +181,9 @@ const HEARTH = new THREE.Vector3(8.0, 0.35, 2.05);
   const jug = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 0.2, 8), mat('#8a5a3a')); add(jug, 6.9, 1.55, 2.3);
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), mat('#d8d0bc')); add(skull, 8.0, 1.53, 2.3);
   for (const x of [8.7, 9.1]) { const c = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.18, 6), M.wax); add(c, x, 1.54, 2.28); }
-  const sword = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.04, 0.02), mat('#aab0b6', { metalness: 0.8, roughness: 0.3 })); add(sword, 8.0, 2.1, Z0 + 0.14);
-  // logs
-  for (const [dx, r] of [[-0.2, 0.3], [0.2, -0.3], [0, 0]]) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.9, 7), mat('#2a1a0c')); l.rotation.z = Math.PI / 2; l.rotation.y = r; add(l, 8.0 + dx, 0.14 + (dx === 0 ? 0.1 : 0), 2.05); }
+  const sword = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.04, 0.02), mat('#aab0b6', { metalness: 0.8, roughness: 0.3 })); add(sword, 8.0, 2.1, z1 - 0.1);
+  // logs, charred where they sit in the embers
+  for (const [dx, r] of [[-0.2, 0.3], [0.2, -0.3], [0, 0]]) { const l = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 0.9, 7), mat('#1c110a')); l.rotation.z = Math.PI / 2; l.rotation.y = r; add(l, 8.0 + dx, 0.16 + (dx === 0 ? 0.1 : 0), 2.05, { cast: false }); }
 }
 
 // stage and rug
@@ -154,12 +224,11 @@ for (let z = 5.2 * S; z < 10 * S; z += 0.9) { slab(3 * S - 0.06, 0, z - 0.04, 3 
     for (let x = 19 * S + 0.1; x < X1 - 0.1; x += 0.13 + r() * 0.08) {
       if (x > 22 * S - 0.2 && x < 23 * S + 0.2) continue;
       const h = 0.18 + r() * 0.14;
-      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, h, 7), new THREE.MeshStandardMaterial({ color: bottleCols[Math.floor(r() * 6)], roughness: 0.15, metalness: 0.1 }));
-      add(b, x, y + h / 2, Z0 + 0.15);
+      const b = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, h, 7), mat(bottleCols[Math.floor(r() * 6)], { roughness: 0.15, metalness: 0.1 }));
+      add(b, x, y + h / 2, Z0 + 0.15, { cast: false });
     }
   }
   // kitchen door
-  slab(22 * S + 0.05, 0, Z0, 23 * S - 0.05, 2.1, Z0 + 0.06, mat('#5a3a22'));
   slab(22 * S, 2.1, Z0, 23 * S, 2.2, Z0 + 0.1, M.beam);
   for (let y = 3; y <= 6; y++) {
     const k = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.7, 12), mat('#6b4424'));
@@ -183,43 +252,107 @@ for (let z = 5.2 * S; z < 10 * S; z += 0.9) { slab(3 * S - 0.06, 0, z - 0.04, 3 
   for (let i = 0; i < 4; i++) { const b = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.3, 6), mat(['#5a7a3a', '#7a6a3a', '#4a6a3a', '#6a7a4a'][i])); b.rotation.x = Math.PI; add(b, 2.5 * S + i * 0.35, H - 0.6, Z0 + 0.3); }
 }
 
-// windows: glass is a live canvas (sky, stars, rain, lightning)
+// windows: set back in the wall; the glass is a live canvas (sky, town, weather)
 const windows = [];
-for (const [x0, x1] of [[3 * S, 5 * S], [14 * S, 17 * S]]) {
-  const w = x1 - x0 - 0.2, hgt = 1.3, cx = (x0 + x1) / 2, cy = 1.85;
-  const [cv, g] = TX.canvas(128, 128);
+const paneTex = [TX.paneLight(2), TX.paneLight(3)];
+WIN.forEach((W, wi) => {
+  const { w, hgt, cx, cy } = W, zg = Z0 - RECESS;
+  const [cv, g] = TX.canvas(256, 192);
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
   const glass = plane(w, hgt, new THREE.MeshBasicMaterial({ map: tex, fog: false }));
-  add(glass, cx, cy, Z0 + 0.02, { cast: false });
-  for (const [a, b, c2, d] of [[-w / 2 - 0.08, -hgt / 2 - 0.08, w / 2 + 0.08, -hgt / 2], [-w / 2 - 0.08, hgt / 2, w / 2 + 0.08, hgt / 2 + 0.08], [-w / 2 - 0.08, -hgt / 2, -w / 2, hgt / 2], [w / 2, -hgt / 2, w / 2 + 0.08, hgt / 2], [-0.03, -hgt / 2, 0.03, hgt / 2], [-w / 2, -0.03, w / 2, 0.03]]) slab(cx + a, cy + b, Z0, cx + c2, cy + d, Z0 + 0.1, M.beam);
+  add(glass, cx, cy, zg, { cast: false, dyn: true });
+  // the reveal: the thickness of the wall around the opening
+  slab(cx - w / 2 - 0.02, cy - hgt / 2 - 0.02, zg, cx - w / 2, cy + hgt / 2 + 0.02, Z0, M.reveal, { cast: false }); slab(cx + w / 2, cy - hgt / 2 - 0.02, zg, cx + w / 2 + 0.02, cy + hgt / 2 + 0.02, Z0, M.reveal, { cast: false });
+  slab(cx - w / 2, cy + hgt / 2, zg, cx + w / 2, cy + hgt / 2 + 0.02, Z0, M.reveal, { cast: false }); slab(cx - w / 2, cy - hgt / 2 - 0.05, zg, cx + w / 2, cy - hgt / 2, Z0 + 0.02, M.beam, { cast: false });
+  // surround at the wall face, glazing bars at the glass
+  for (const [a, b, c2, d] of [[-w / 2 - 0.08, -hgt / 2 - 0.08, w / 2 + 0.08, -hgt / 2], [-w / 2 - 0.08, hgt / 2, w / 2 + 0.08, hgt / 2 + 0.08], [-w / 2 - 0.08, -hgt / 2, -w / 2, hgt / 2], [w / 2, -hgt / 2, w / 2 + 0.08, hgt / 2]]) slab(cx + a, cy + b, Z0, cx + c2, cy + d, Z0 + 0.1, M.beam);
+  const cols = wi ? 3 : 2;
+  for (let i = 1; i < cols; i++) { const x = cx - w / 2 + (w * i) / cols; slab(x - 0.025, cy - hgt / 2, zg, x + 0.025, cy + hgt / 2, zg + 0.06, M.beam, { cast: false }); }
+  slab(cx - w / 2, cy - 0.025, zg, cx + w / 2, cy + 0.025, zg + 0.06, M.beam, { cast: false });
   slab(cx - w / 2 - 0.12, cy - hgt / 2 - 0.12, Z0, cx + w / 2 + 0.12, cy - hgt / 2 - 0.08, Z0 + 0.2, M.beam);
-  // light shaft for daytime
-  const shaft = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, 3.2), new THREE.MeshBasicMaterial({ color: '#ffe9c0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
-  shaft.geometry.translate(0, 0, 1.6);
-  shaft.position.set(cx, cy, Z0); shaft.rotation.x = 0.55;
-  scene.add(shaft);
-  windows.push({ cv, g, tex, w, cx, cy, shaft, drops: Array.from({ length: 30 }, () => [Math.random() * 128, Math.random() * 128, 0.5 + Math.random()]) });
-}
+  // light falling through: slices in the air and a pool on the boards
+  const shaftMat = new THREE.MeshBasicMaterial({ map: paneTex[wi], color: '#ffe2b0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false, side: THREE.DoubleSide });
+  const shaft = new THREE.Group();
+  for (let i = 1; i <= 22; i++) { const sl = plane(w * 1.05, hgt * 1.05, shaftMat); sl.position.set(0, -i * 0.076, i * 0.124); shaft.add(sl); }
+  shaft.position.set(cx, cy, Z0); scene.add(shaft);
+  const poolMat = new THREE.MeshBasicMaterial({ map: paneTex[wi], transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+  const pool = plane(w * 1.1, 2.5, poolMat); pool.rotation.x = -Math.PI / 2; pool.position.set(cx, 0.012, Z0 + 3.05); scene.add(pool);
+  const r = mulberry(70 + wi * 13);
+  let rx = -20; const roofs = [];
+  while (rx < 256) { const bw = 34 + r() * 46; roofs.push({ x: rx, w: bw, h: 34 + r() * 44, pitch: 14 + r() * 16, chim: r() < 0.6 ? r() : -1, lit: Array.from({ length: 2 }, () => (r() < 0.55 ? [0.15 + r() * 0.6, 0.3 + r() * 0.4, r()] : null)) }); rx += bw + 2 + r() * 10; }
+  windows.push({
+    cv, g, tex, w, cx, cy, shaftMat, poolMat, glass, roofs, acc: 1,
+    hills: Array.from({ length: 18 }, (_, i) => 96 + Math.sin(i * 0.9 + wi * 2) * 9 + r() * 7),
+    stars: Array.from({ length: 46 }, () => [r() * 256, r() * 110, 0.3 + r() * 0.5, r() * 6]),
+    clouds: Array.from({ length: 7 }, () => ({ x: r() * 320 - 40, y: 10 + r() * 80, w: 50 + r() * 70, v: 1.5 + r() * 3 })),
+    drops: Array.from({ length: 70 }, () => [Math.random() * 256, Math.random() * 192, 0.6 + Math.random()]),
+    beads: Array.from({ length: 26 }, () => ({ x: Math.random() * 256, y: Math.random() * 192, v: 0, r: 1 + Math.random() * 1.8 })),
+    moon: wi === 1,
+  });
+});
 
-// front door: swings open when someone passes
+// front door: swings open when someone passes, onto the lane outside
 const door = new THREE.Group();
+const DOOR = new THREE.Vector3(13 * S, 1.2, Z1);
+let rainOut, outsideMat, doorPool, laneGlow;
 {
   door.position.set(12 * S, 0, Z1 - 0.06);
-  const leaf = new THREE.Mesh(new THREE.BoxGeometry(2 * S, 2.2, 0.08), mat('#4e321c'));
-  leaf.position.x = S; leaf.castShadow = true; door.add(leaf);
-  for (const y of [0.4, 1.8]) { const b = new THREE.Mesh(new THREE.BoxGeometry(2 * S, 0.06, 0.1), M.iron); b.position.set(S, y - 1.1, 0.01); leaf.add(b); }
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(2 * S, 2.2, 0.08), new THREE.MeshStandardMaterial({ ...tex2(woodC, [1, 1], 0.6), color: '#9a7a5a', roughness: 0.8 }));
+  leaf.position.x = S; leaf.castShadow = true; leaf.receiveShadow = true; door.add(leaf);
+  for (const y of [0.4, 1.8]) { const b = new THREE.Mesh(new THREE.BoxGeometry(2 * S, 0.06, 0.1), M.iron); b.position.set(0, y - 1.1, 0.01); leaf.add(b); }
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.06, 0.012, 5, 12), M.iron); ring.position.set(0.6, 0, -0.05); leaf.add(ring);
   leaf.position.y = 1.1;
   scene.add(door);
-  slab(12 * S - 0.12, 0, Z1 - 0.15, 12 * S, 2.35, Z1, M.beam); slab(14 * S, 0, Z1 - 0.15, 14 * S + 0.12, 2.35, Z1, M.beam);
-  slab(12 * S - 0.12, 2.2, Z1 - 0.15, 14 * S + 0.12, 2.35, Z1, M.beam);
+  slab(12 * S - 0.12, 0, Z1 - 0.15, 12 * S, 2.35, Z1 + 0.3, M.beam); slab(14 * S, 0, Z1 - 0.15, 14 * S + 0.12, 2.35, Z1 + 0.3, M.beam);
+  slab(12 * S - 0.12, 2.2, Z1 - 0.15, 14 * S + 0.12, 2.35, Z1 + 0.3, M.beam);
+  slab(12 * S, -0.02, Z1 - 0.04, 14 * S, 0.03, Z1 + 0.4, M.stone, { cast: false });
+  const ground = plane(14, 7.5, M.cobble); ground.rotation.x = -Math.PI / 2; add(ground, 13 * S, -0.01, Z1 + 3.75, { cast: false, dyn: true });
+  const [laneTex, laneLit] = TX.street();
+  outsideMat = new THREE.MeshBasicMaterial({ map: laneTex, fog: false });
+  const lane = plane(18, 9, outsideMat); lane.rotation.y = Math.PI; add(lane, 13 * S, 3.0, Z1 + 7.4, { cast: false, dyn: true });
+  laneGlow = new THREE.MeshBasicMaterial({ map: laneLit, fog: false, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false });
+  const lit = plane(18, 9, laneGlow); lit.rotation.y = Math.PI; lit.position.set(13 * S, 3.0, Z1 + 7.38); scene.add(lit);
+  // rain seen through the doorway
+  const N = 140, pos = new Float32Array(N * 6);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  rainOut = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: '#a8b8d0', transparent: true, opacity: 0.35, fog: false }));
+  rainOut.userData.d = Array.from({ length: N }, () => [8.6 + Math.random() * 4.4, Math.random() * 3.2, Z1 + 0.4 + Math.random() * 4.5, 7 + Math.random() * 4]);
+  rainOut.frustumCulled = false; rainOut.visible = false; scene.add(rainOut);
+  // cold light spilling over the threshold
+  const [c, g] = TX.canvas(64, 128);
+  const gr = g.createLinearGradient(0, 128, 0, 0); gr.addColorStop(0, '#fff'); gr.addColorStop(1, '#000');
+  g.fillStyle = gr; g.filter = 'blur(6px)'; g.fillRect(10, 0, 44, 128);
+  const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace;
+  doorPool = plane(2.0, 3.2, new THREE.MeshBasicMaterial({ map: tx, color: '#8fa4d0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+  doorPool.rotation.x = -Math.PI / 2; doorPool.position.set(13 * S, 0.013, Z1 - 1.6); scene.add(doorPool);
 }
-const outside = plane(2 * S, 2.2, new THREE.MeshBasicMaterial({ color: '#0b0f1a', fog: false }));
-outside.rotation.y = Math.PI; add(outside, 13 * S, 1.1, Z1 + 0.02, { cast: false });
+
+// the kitchen passage: its door stands open on firelight, steam and the clatter of pots
+const KITCHEN = new THREE.Vector3((KX0 + KX1) / 2, 1.2, Z0 - 0.6);
+let kitchenGlow, kitchenPool;
+{
+  const d = 1.9, z1 = Z0 - d;
+  const fl = plane(KX1 - KX0 + 0.3, d, M.flag); fl.rotation.x = -Math.PI / 2; add(fl, KITCHEN.x, 0.003, Z0 - d / 2, { cast: false });
+  slab(KX0 - 0.2, 0, z1, KX0, 2.3, Z0, M.stone, { cast: false }); slab(KX1, 0, z1, KX1 + 0.2, 2.3, Z0, M.stone, { cast: false });
+  slab(KX0 - 0.2, 2.1, z1, KX1 + 0.2, 2.3, Z0, M.beam, { cast: false });
+  const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.66, 2.05, 0.05), mat('#5a3a22')); leaf.geometry.translate(0.33, 0, 0); leaf.rotation.y = 1.42; add(leaf, KX0 + 0.03, 1.03, Z0 - 0.04, { cast: false });
+  const [c, g] = TX.canvas(64, 96);
+  g.fillStyle = '#2a1608'; g.fillRect(0, 0, 64, 96);
+  const gr = g.createRadialGradient(34, 70, 2, 34, 66, 60); gr.addColorStop(0, '#ffd890'); gr.addColorStop(0.3, '#e07a28'); gr.addColorStop(1, 'rgba(60,24,6,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 96);
+  g.fillStyle = '#140a04'; g.fillRect(0, 30, 64, 3); g.fillRect(0, 52, 30, 3);
+  for (const [x, w2, h2] of [[6, 7, 9], [16, 5, 12], [26, 8, 7], [44, 6, 10], [53, 6, 8]]) g.fillRect(x, 30 - h2, w2, h2);
+  g.beginPath(); g.arc(46, 46, 7, 0, Math.PI); g.fill(); g.fillRect(45, 33, 2, 8); g.fillRect(8, 76, 20, 20);
+  const tx = new THREE.CanvasTexture(c); tx.colorSpace = THREE.SRGBColorSpace;
+  kitchenGlow = new THREE.MeshBasicMaterial({ map: tx, fog: false });
+  add(plane(KX1 - KX0 + 0.4, 2.3, kitchenGlow), KITCHEN.x, 1.15, z1, { cast: false, dyn: true });
+}
 
 // furniture from the simulation's own map
 for (const t of tables) {
   const x0 = t.x * S + 0.05, x1 = (t.x + t.w) * S - 0.05, z0 = t.y * S + 0.06, z1 = (t.y + 1) * S - 0.06;
   slab(x0, 0.72, z0, x1, 0.78, z1, t.booth ? M.dark : M.top);
+  slab(x0 + 0.06, 0.62, z0 + 0.06, x1 - 0.06, 0.72, z1 - 0.06, M.beam, { cast: false });
   for (const [x, z] of [[x0 + 0.08, z0 + 0.08], [x1 - 0.08, z0 + 0.08], [x0 + 0.08, z1 - 0.08], [x1 - 0.08, z1 - 0.08]]) slab(x - 0.04, 0, z - 0.04, x + 0.04, 0.72, z + 0.04, M.beam);
 }
 function seatYaw(s) {
@@ -228,23 +361,31 @@ function seatYaw(s) {
   if (s.side === 'e') return -Math.PI / 2;
   return s.face === 'f' ? 0 : Math.PI;
 }
-for (const s of seats) {
-  s.yaw = seatYaw(s);
-  const cx = (s.x + 0.5) * S, cz = (s.y + 0.5) * S;
-  if (s.stool) {
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.17, 0.06, 10), M.top); add(top, cx, 0.7, cz);
-    for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; const l = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.7, 5), M.beam); add(l, cx + Math.cos(a) * 0.12, 0.35, cz + Math.sin(a) * 0.12); }
-    s.h = 0.72;
-  } else {
-    const g = new THREE.Group(); g.position.set(cx, 0, cz); g.rotation.y = s.yaw; scene.add(g);
-    const seatMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.05, 0.42), M.dark); seatMesh.position.y = 0.45; g.add(seatMesh);
-    for (const [x, z] of [[-0.18, -0.17], [0.18, -0.17], [-0.18, 0.17], [0.18, 0.17]]) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.45, 0.04), M.beam); l.position.set(x, 0.225, z); g.add(l); }
-    const back = new THREE.Mesh(new THREE.BoxGeometry(0.44, s.table && s.table.booth ? 0.9 : 0.5, 0.05), s.table && s.table.booth ? M.dark : M.beam);
-    back.position.set(0, s.table && s.table.booth ? 0.9 : 0.72, -0.2); g.add(back);
-    g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
-    s.h = 0.47;
+{
+  const jr = mulberry(90);
+  for (const s of seats) {
+    s.yaw = seatYaw(s);
+    const cx = (s.x + 0.5) * S, cz = (s.y + 0.5) * S;
+    const g = new THREE.Group(); g.position.set(cx, 0, cz);
+    if (s.stool) {
+      const top = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.17, 0.06, 10), M.top); top.position.y = 0.7; g.add(top);
+      for (let i = 0; i < 3; i++) { const a = (i / 3) * Math.PI * 2; const l = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.025, 0.7, 5), M.beam); l.position.set(Math.cos(a) * 0.12, 0.35, Math.sin(a) * 0.12); l.rotation.set(Math.sin(a) * 0.12, 0, -Math.cos(a) * 0.12); g.add(l); }
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.13, 0.012, 4, 10), M.beam); ring.rotation.x = Math.PI / 2; ring.position.y = 0.25; g.add(ring);
+      s.h = 0.72;
+    } else {
+      const booth = s.table && s.table.booth;
+      g.rotation.y = s.yaw + (booth ? 0 : (jr() - 0.5) * 0.22);     // nobody ever pushes a chair in straight
+      const seatMesh = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.05, 0.42), M.dark); seatMesh.position.y = 0.45; g.add(seatMesh);
+      for (const [x, z] of [[-0.18, -0.17], [0.18, -0.17], [-0.18, 0.17], [0.18, 0.17]]) { const l = new THREE.Mesh(new THREE.BoxGeometry(0.04, z < 0 && !booth ? 0.98 : 0.45, 0.04), M.beam); l.position.set(x, z < 0 && !booth ? 0.49 : 0.225, z); g.add(l); }
+      if (booth) { const back = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.9, 0.05), M.dark); back.position.set(0, 0.9, -0.2); g.add(back); }
+      else for (const y of [0.66, 0.88]) { const sl = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.1, 0.03), M.beam); sl.position.set(0, y, -0.17); g.add(sl); }
+      s.h = 0.47;
+    }
+    addGroup(g);
   }
 }
+const strawTex = TX.toTex(TX.plaster(6), [3, 2]);
+const props = buildProps({ scene, add, slab, addGroup, M, S, H, X0, X1, Z0, Z1, strawTex, windows });
 
 // ------------------------------------------------------------------ light
 const hemi = new THREE.HemisphereLight('#ffe8c8', '#3a2a1a', 0.4); scene.add(hemi);
@@ -261,11 +402,16 @@ const lightning = new THREE.DirectionalLight('#c8d4ff', 0); lightning.position.s
 
 const flameTex = TX.flameSprite();
 const glowTex = TX.glowSprite();
-function sprite(tex, s, color = '#ffffff', opacity = 1) {
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity, fog: false }));
+const smokeTex = TX.smokeSprite();
+const HDR = 2;      // flames are brighter than white, so they bloom
+function sprite(tex, s, color = '#ffffff', opacity = 1, o = {}) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity, fog: false, ...o }));
   sp.scale.set(s, s, 1);
   return sp;
 }
+const hot = (hex, k = HDR) => new THREE.Color(hex).multiplyScalar(k);
+kitchenPool = plane(1.6, 2.2, new THREE.MeshBasicMaterial({ map: glowTex, color: '#ff9a48', transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+kitchenPool.rotation.x = -Math.PI / 2; kitchenPool.position.set(KITCHEN.x, 0.014, Z0 + 0.5); scene.add(kitchenPool);
 
 // fixture lights: candles, sconces, lanterns
 const lamps = [];
@@ -277,49 +423,76 @@ for (const f of fixtures) {
     pos = new THREE.Vector3((t.x + t.w / 2) * S, 0.78, (t.y + 0.5) * S);
     const holder = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 0.02, 8), mat('#b8a47a', { metalness: 0.5 })); holder.position.y = 0.01; g.add(holder);
     const c = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.024, 0.14, 8), M.wax); c.position.y = 0.09; g.add(c);
+    for (let i = 0; i < 3; i++) { const d = new THREE.Mesh(new THREE.SphereGeometry(0.008, 5, 4), M.wax); d.scale.y = 2.5; d.position.set(Math.cos(i * 2.3) * 0.023, 0.1 + i * 0.02, Math.sin(i * 2.3) * 0.023); g.add(d); }
     g.userData.flameY = 0.19;
   } else if (f.type === 'sconce') {
     const x = f.x < 100 ? X0 + 0.14 : X1 - 0.14;
     pos = new THREE.Vector3(x, 1.75, (f.y / TS) * S + 0.3);
     const br = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.06), M.iron); br.position.x = f.x < 100 ? -0.06 : 0.06; g.add(br);
+    const dish = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.03, 0.03, 8), M.iron); dish.position.y = 0.02; g.add(dish);
     const c = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.16, 8), M.wax); c.position.y = 0.09; g.add(c);
     g.userData.flameY = 0.2;
   } else {
     pos = new THREE.Vector3((f.x / TS) * S, 1.11, (f.y / TS) * S);
     const fr = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 0.14), new THREE.MeshStandardMaterial({ color: '#ffcf80', emissive: '#ff9a30', emissiveIntensity: 0, transparent: true, opacity: 0.85 }));
     fr.position.y = 0.13; g.add(fr); g.userData.glass = fr;
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const bar = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.24, 0.014), M.iron); bar.position.set(x * 0.07, 0.13, z * 0.07); g.add(bar); }
     const cap = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.08, 4), M.iron); cap.position.y = 0.28; cap.rotation.y = Math.PI / 4; g.add(cap);
     g.userData.flameY = 0.12;
   }
   g.position.copy(pos);
   g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
   scene.add(g);
-  const fl = sprite(flameTex, 0.07); fl.position.y = g.userData.flameY; fl.center.set(0.5, 0.15); g.add(fl);
-  const gl = sprite(glowTex, 0.35, '#ffb060', 0.6); gl.position.y = g.userData.flameY + 0.02; g.add(gl);
+  const fl = sprite(flameTex, 0.07, hot('#ffffff', 2)); fl.position.y = g.userData.flameY; fl.center.set(0.5, 0.15); g.add(fl);
+  const gl = sprite(glowTex, 0.5, '#ffb060', 0.5); gl.position.y = g.userData.flameY + 0.02; g.add(gl);
   const light = new THREE.PointLight('#ffc080', 0, 0, 2);
   light.position.set(0, g.userData.flameY + 0.1, 0);
   g.add(light);
-  lamps.push({ f, g, fl, gl, light, base: f.type === 'candle' ? 1.6 : f.type === 'sconce' ? 2.2 : 3, phase: Math.random() * 10 });
+  lamps.push({ f, g, fl, gl, light, pos, base: f.type === 'candle' ? 1.6 : f.type === 'sconce' ? 2.2 : 2.4, phase: Math.random() * 10, on: 0, was: false });
 }
 
-// the fire itself
+// the fire itself: flames, a bed of embers, sparks, and smoke drawn up the chimney
 const flames = [];
-for (let i = 0; i < 16; i++) {
-  const sp = sprite(flameTex, 0.4, i % 3 === 0 ? '#ffd080' : '#ff8030', 0.85);
+for (let i = 0; i < 22; i++) {
+  const sp = sprite(flameTex, 0.4, hot(i % 3 === 0 ? '#ffd080' : '#ff7a2a', i % 3 === 0 ? 2 : 1.6), 0.85);
   sp.center.set(0.5, 0.05);
   sp.userData = { x: (Math.random() - 0.5) * 0.9, z: (Math.random() - 0.5) * 0.25, ph: Math.random() * 10, sp: 5 + Math.random() * 6 };
   scene.add(sp); flames.push(sp);
 }
-const fireGlow = sprite(glowTex, 2.4, '#ff9040', 0.5); fireGlow.position.set(8.0, 0.55, 2.2); scene.add(fireGlow);
-const SPARKS = 60;
+const fireGlow = sprite(glowTex, 2.8, '#ff9040', 0.5); fireGlow.position.set(8.0, 0.55, 2.3); scene.add(fireGlow);
+const embers = plane(1.25, 0.5, new THREE.MeshBasicMaterial({ map: glowTex, color: hot('#ff4a12', 2.2), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
+embers.rotation.x = -Math.PI / 2; embers.position.set(8.0, 0.09, 2.05); scene.add(embers);
+const SPARKS = 70;
 const sparkGeo = new THREE.BufferGeometry();
 sparkGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SPARKS * 3), 3));
 const sparkLife = new Float32Array(SPARKS).map(() => Math.random());
-const sparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({ color: '#ffb050', size: 0.025, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false }));
-scene.add(sparks);
+const sparkV = Array.from({ length: SPARKS }, () => [0, 0]);
+const sparks = new THREE.Points(sparkGeo, new THREE.PointsMaterial({ color: hot('#ffb050', 3), size: 0.016, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false, fog: false }));
+sparks.frustumCulled = false; scene.add(sparks);
+
+// soft particles: chimney smoke, steam off the stew, pipe smoke, a snuffed wick
+const PUFFS = 70, puffs = [];
+for (let i = 0; i < PUFFS; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, transparent: true, opacity: 0, depthWrite: false }));
+  sp.visible = false; scene.add(sp); puffs.push({ sp, life: 1, max: 1 });
+}
+let puffI = 0;
+function puff(x, y, z, o = {}) {
+  const p = puffs[puffI = (puffI + 1) % PUFFS];
+  p.sp.position.set(x, y, z); p.life = 0; p.max = o.life || 2.5;
+  p.vx = o.vx || 0; p.vy = o.vy ?? 0.25; p.vz = o.vz || 0; p.s0 = o.s0 || 0.08; p.s1 = o.s1 || 0.4; p.op = o.op || 0.25;
+  p.sp.material.color.set(o.col || '#b8b0a4'); p.sp.material.rotation = Math.random() * 6; p.sp.visible = true;
+}
+// a smoky haze that hangs under the beams and catches the firelight
+const haze = [];
+for (let i = 0; i < 7; i++) {
+  const sp = sprite(smokeTex, 5, '#ffb070', 0.05, { fog: true });
+  sp.userData = { x: X0 + 2 + Math.random() * (X1 - X0 - 4), z: Z0 + 1.5 + Math.random() * (Z1 - Z0 - 3), y: 2.1 + Math.random() * 0.9, ph: Math.random() * 10 };
+  sp.material.rotation = Math.random() * 6; scene.add(sp); haze.push(sp);
+}
 
 // dust drifting in the air
-const DUST = 400;
+const DUST = 420;
 const dustGeo = new THREE.BufferGeometry();
 const dustPos = new Float32Array(DUST * 3);
 for (let i = 0; i < DUST; i++) { dustPos[i * 3] = X0 + Math.random() * (X1 - X0); dustPos[i * 3 + 1] = Math.random() * H; dustPos[i * 3 + 2] = Z0 + Math.random() * (Z1 - Z0); }
@@ -327,16 +500,30 @@ dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({ color: '#ffe0b0', size: 0.012, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }));
 scene.add(dust);
 
+batchStatics();
+
+// ------------------------------------------------------------------ sound
+const sound = createSound({
+  hearth: HEARTH, door: DOOR, kitchen: KITCHEN, bar: new THREE.Vector3(20.5 * S, 1.2, 5 * S), stage: new THREE.Vector3(3.5 * S, 1.3, 3 * S),
+  windows: windows.map((w) => new THREE.Vector3(w.cx, w.cy, Z0)),
+});
+function startAudio() { Sfx.spatial = true; Sfx.setOn(true); sound.start(); }
+const surfaceAt = (x, z) => { const k = kind[Math.floor(z / S)]?.[Math.floor(x / S)]; return k === 'rug' ? 'rug' : k === 'flag' ? 'flag' : 'wood'; };
+const camDir = new THREE.Vector3();
+
 // ------------------------------------------------------------------ people
 const bodies = new Map();
+const blobTex = TX.blobShadow();
 function bodyFor(a) {
   let b = bodies.get(a);
   if (!b) {
     b = a.kind === 'cat' ? makeCat(a.catCol) : makePerson(a);
     b.root.userData.agent = a;
     scene.add(b.root);
+    b.blob = plane(1, 1, new THREE.MeshBasicMaterial({ map: blobTex, transparent: true, depthWrite: false, opacity: 0.8 }));
+    b.blob.rotation.x = -Math.PI / 2; b.blob.renderOrder = 1; scene.add(b.blob);
     bodies.set(a, b);
-    b.last = { x: a.x, y: a.y };
+    b.last = { x: a.x, y: a.y }; b.fresh = true;
   }
   return b;
 }
@@ -354,16 +541,33 @@ function placeItem(key, kindName, x, y, z) {
 }
 
 const now = () => performance.now() / 1000;
+const wrap = (d) => { while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
+const life = { doorT: 0, wasMusic: false, fast: false, cat: null, talkers: [] };
+const headPos = new THREE.Vector3();
+
 function syncPeople(dt, t) {
   for (const it of tableItems.values()) it.userData.seen = false;
+  const ms = performance.now();
+  life.talkers = G.agents.filter((a) => a.present && a.bubble && ms < a.bubble.until && !a.bubble.whisper);
+  life.cat = null;
+  const bard = G.music.playing ? G.music.bard : null;
+  if (life.wasMusic && !G.music.playing && !life.fast) {
+    const fans = G.agents.filter((a) => a.present && a.kind === 'person' && a.sitting && a.mood > 0.4);
+    for (const a of fans) { const b = bodies.get(a); if (b) b.anim.clap = rf(1.8, 3.2); }
+    sound.claps(fans.map((a) => ({ x: px2m(a.x), y: 1, z: px2m(a.y - 5) })));
+  }
+  life.wasMusic = G.music.playing;
+  const k = Math.min(1, dt * 11);
+
   for (const a of G.agents) {
     const b = bodies.get(a);
-    if (!a.present) { if (b) b.root.visible = false; continue; }
+    if (!a.present) { if (b) { b.root.visible = false; b.blob.visible = false; b.fresh = true; } continue; }
     const B = bodyFor(a);
     B.root.visible = true;
     const X = px2m(a.x), Z = px2m(a.y - 5);
-    const onStairs = kind[a.ty] && kind[a.ty][a.tx] === 'stairs';
-    const elev = onStairs ? stairElev(Z) : 0;
+    const tile = kind[a.ty] && kind[a.ty][a.tx];
+    const onStairs = tile === 'stairs';
+    const elev = onStairs ? stairElev(Z) : tile === 'stage' ? 0.22 : 0;
     const moving = !!a.path;
     const dx = a.x - B.last.x, dz = a.y - B.last.y;
     B.last = { x: a.x, y: a.y };
@@ -372,89 +576,160 @@ function syncPeople(dt, t) {
     if (a.sitting && a.seat) yaw = a.seat.yaw;
     const partner = a.convo ? (a.convo.a === a ? a.convo.b : a.convo.a) : null;
     if (!moving && !a.sitting && partner) yaw = Math.atan2(partner.x - a.x, partner.y - a.y);
-    let d = yaw - B.anim.yaw; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2;
-    B.anim.yaw += d * Math.min(1, dt * 8);
-    B.root.rotation.y = B.anim.yaw;
+    B.anim.yaw += wrap(yaw - B.anim.yaw) * Math.min(1, dt * 8);
+    B.root.rotation.set(0, B.anim.yaw, 0);
+    B.blob.visible = !onStairs;
 
     if (B.cat) {
       B.root.position.set(X, elev, Z);
       const sleep = a.pose === 'sleep', sit = a.pose === 'sit';
-      B.body.scale.set(1, sleep ? 0.6 : 1, sleep ? 0.7 : 1);
+      B.body.scale.set(1, (sleep ? 0.6 : 1) + Math.sin(t * 1.6) * 0.025, sleep ? 0.7 : 1);
       B.body.position.y = sleep ? 0.08 : 0.16;
       B.head.position.y = sleep ? 0.12 : sit ? 0.32 : 0.26;
       B.tail.rotation.y = Math.sin(t * 2 + a.id) * (sleep ? 0.1 : 0.6);
       B.tail.rotation.x = sit ? -0.6 : 0.3;
       B.legs.forEach((l, i) => { l.visible = !sleep; l.rotation.x = moving ? Math.sin(a.walkPhase * Math.PI + i * Math.PI) * 0.6 : 0; });
-      if (a.sitting === false && a.pose === 'sit' && kind[a.ty]?.[a.tx] === 'seat') B.root.position.y = 0.47;
+      if (a.sitting === false && a.pose === 'sit' && tile === 'seat') B.root.position.y = 0.47;
+      B.blob.position.set(X, B.root.position.y + 0.012, Z); B.blob.scale.set(0.5, 0.5, 1);
+      life.cat = B.root.position;
       continue;
     }
 
-    const sc = B.scale;
-    let rootY = elev;
+    const A = B.anim, sc = B.scale, ph0 = A.ph;
+    let rootY = elev, tx = X, tz = Z;
     const [L, R] = B.legs;
     const [AL, AR] = B.arms;
     const ph = a.walkPhase * Math.PI;
+    const act = a.activity || '';
+    const talking = a.bubble && ms < a.bubble.until;
+    const breath = Math.sin(t * 1.4 + ph0);
     // reset pose
-    B.torso.rotation.set(0, 0, 0); B.head.rotation.set(0, 0, 0);
-    for (const arm of B.arms) { arm.sh.rotation.set(0, 0, 0); arm.el.rotation.set(0, 0, 0); }
+    for (const j of B.joints) j.rotation.set(0, 0, 0);
+    B.body.rotation.set(0, 0, 0); B.body.position.set(0, 0, 0);
+    AL.sh.rotation.z = -0.07; AR.sh.rotation.z = 0.07;
+    B.chest.scale.y = 1 + breath * 0.014;
+    B.torso.rotation.x = breath * 0.008;
+    const mug = a.seat && a.seat.mug && a.seat.mug.owner === a.id && a.seat.mug.level > 0.02 ? a.seat.mug : null;
+    let drinking = false, busyArms = false;
+
     if (a.sitting) {
       const s = a.seat;
       rootY = (s ? s.h : 0.47) - 0.84 * sc + 0.02;
-      for (const l of B.legs) { l.hip.rotation.x = -Math.PI / 2 + 0.1; l.knee.rotation.x = Math.PI / 2 - 0.1; }
+      const spread = 0.12 + 0.1 * Math.sin(ph0 * 3);
+      L.hip.rotation.set(-Math.PI / 2 + 0.1, 0, -spread * 0.5); R.hip.rotation.set(-Math.PI / 2 + 0.1, 0, spread * 0.5);
+      L.knee.rotation.x = Math.PI / 2 - 0.1 + Math.sin(ph0) * 0.25; R.knee.rotation.x = Math.PI / 2 - 0.1 + Math.cos(ph0 * 1.7) * 0.25;
       const fwd = 0.08;
-      B.root.position.set((s ? (s.x + 0.5) * S : X) - Math.sin(yaw) * -fwd, rootY, (s ? (s.y + 0.5) * S : Z) - Math.cos(yaw) * -fwd);
+      tx = (s ? (s.x + 0.5) * S : X) + Math.sin(yaw) * fwd; tz = (s ? (s.y + 0.5) * S : Z) + Math.cos(yaw) * fwd;
       if (B.legs.skirt) B.legs.skirt.visible = false;
-      AL.sh.rotation.x = -0.5; AL.el.rotation.x = -0.6; AR.sh.rotation.x = -0.5; AR.el.rotation.x = -0.6;
+      const engaged = partner || talking;
+      const slump = a.sick ? 0 : a.drunk > 0.75 ? 0.22 : 0;
+      B.torso.rotation.x += (engaged ? 0.17 : -0.03 + 0.05 * Math.sin(ph0 * 2)) + slump;
+      B.torso.rotation.z = Math.sin(t * 0.23 + ph0) * 0.025;
+      for (const arm of B.arms) { arm.sh.rotation.x = engaged ? -0.8 : -0.5; arm.el.rotation.x = engaged ? -0.95 : -0.7; arm.sh.rotation.z = arm.side * -0.1; }
+      if (slump) B.head.rotation.x = 0.25;
+      if (G.music.playing && a !== bard && a.mood > 0.45) { R.knee.rotation.x += Math.max(0, Math.sin(t * 6.4 + ph0)) * 0.12; B.head.rotation.x += Math.sin(t * 6.4 + ph0) * 0.03; }
     } else {
       const swing = moving ? Math.sin(ph) * 0.55 : 0;
       L.hip.rotation.x = swing; R.hip.rotation.x = -swing;
       L.knee.rotation.x = moving ? Math.max(0, Math.sin(ph + 1.2)) * 0.8 : 0;
       R.knee.rotation.x = moving ? Math.max(0, Math.sin(ph + 1.2 + Math.PI)) * 0.8 : 0;
       AL.sh.rotation.x = -swing * 0.7; AR.sh.rotation.x = swing * 0.7;
-      AL.el.rotation.x = AR.el.rotation.x = moving ? -0.3 : -0.1;
-      if (moving) rootY += Math.abs(Math.cos(ph)) * 0.035;
+      AL.el.rotation.x = AR.el.rotation.x = moving ? -0.35 : -0.12;
+      if (moving) {
+        rootY += Math.abs(Math.cos(ph)) * 0.035;
+        B.torso.rotation.x += 0.07; B.torso.rotation.y = -swing * 0.16;
+        const si = Math.floor(a.walkPhase);
+        if (si !== A.stepI) { A.stepI = si; if (!life.fast) sound.step({ x: X, z: Z }, surfaceAt(X, Z), 0.55 * sc); }
+      } else {
+        // standing: weight drifts from one foot to the other
+        const w = Math.sin(t * 0.33 + ph0);
+        B.body.rotation.z = w * 0.035; B.body.position.x = w * 0.02; B.torso.rotation.z = -w * 0.04;
+        L.hip.rotation.z = -w * 0.035; R.hip.rotation.z = -w * 0.035;
+        if (/by the fire/.test(act)) { for (const arm of B.arms) { arm.sh.rotation.x = -0.95; arm.el.rotation.x = -0.45; arm.sh.rotation.z = arm.side * -(0.2 + 0.06 * Math.sin(t * 5 + ph0)); } busyArms = true; }
+        if (/candles/.test(act)) { AR.sh.rotation.x = -1.7; AR.el.rotation.x = -0.3; busyArms = true; }
+        if (/drawing a drink/.test(act)) { AR.sh.rotation.x = -1.0; AR.el.rotation.x = -0.6; busyArms = true; }
+      }
+      if (a.carry === 'broom') { const sw = Math.sin(t * 3.6 + ph0); AR.sh.rotation.x = -0.75 + sw * 0.25; AL.sh.rotation.x = -0.9 + sw * 0.25; AL.el.rotation.x = AR.el.rotation.x = -0.6; AL.sh.rotation.z = 0.3; B.torso.rotation.x += 0.22; B.torso.rotation.y = sw * 0.2; busyArms = true; }
+      else if (a.carry && a.carry !== 'lute' && a.carry !== 'relic') { AR.sh.rotation.x = -0.75; AR.el.rotation.x = -1.0; busyArms = true; }
       if (B.legs.skirt) B.legs.skirt.visible = true;
-      B.root.position.set(X, rootY, Z);
     }
-    // breathing and drunken sway
-    B.torso.rotation.z = Math.sin(t * 1.3 + a.id) * 0.015 + (a.drunk > 0.6 ? Math.sin(t * 0.9 + a.id) * 0.06 : 0);
+    if (B.cloak) B.cloak.rotation.x = moving ? 0.2 + Math.sin(ph * 2) * 0.05 : a.sitting ? 0.12 : 0.03;
+    // drunken sway
+    if (a.drunk > 0.6) B.torso.rotation.z += Math.sin(t * 0.9 + a.id) * 0.06;
     if (a.dance) {
-      B.root.position.y += Math.abs(Math.sin(t * 6 + a.id)) * 0.08;
+      rootY += Math.abs(Math.sin(t * 6 + a.id)) * 0.08;
       AL.sh.rotation.z = -2.4 + Math.sin(t * 6) * 0.3; AR.sh.rotation.z = 2.4 + Math.sin(t * 6 + 1) * 0.3;
-      B.root.rotation.y += Math.sin(t * 2 + a.id) * 0.5;
+      B.root.rotation.y += Math.sin(t * 2 + a.id) * 0.5; busyArms = true;
     }
-    if (a.shake) { AR.sh.rotation.x = -1.4 + Math.sin(t * 14 + a.id) * 0.6; AL.sh.rotation.x = -1.2; B.torso.rotation.x = 0.2; }
-    if (a.sick) { B.torso.rotation.x = 0.9; B.head.rotation.x = 0.4; AL.sh.rotation.x = AR.sh.rotation.x = -1.2; }
-    if (a.hand) { AR.sh.rotation.x = -2.8; AR.el.rotation.x = -0.2; }
+    if (a.shake) { AR.sh.rotation.x = -1.4 + Math.sin(t * 14 + a.id) * 0.6; AL.sh.rotation.x = -1.2; B.torso.rotation.x = 0.2; busyArms = true; }
+    if (a.sick) { B.torso.rotation.x = 0.9; B.head.rotation.x = 0.4; AL.sh.rotation.x = AR.sh.rotation.x = -1.2; busyArms = true; }
+    if (a.hand) { AR.sh.rotation.x = -2.5 + Math.sin(t * 5) * 0.08; AR.el.rotation.x = -0.45; AR.sh.rotation.z = 0.25; busyArms = true; }
 
-    // talking: small nods and hand gestures
-    const talking = a.bubble && performance.now() < a.bubble.until;
+    // a new line: give it a voice, from where they are
+    if (a.bubble && a.bubble !== B.lastBubble) {
+      B.lastBubble = a.bubble;
+      if (!life.fast) { B.head.getWorldPosition(headPos); sound.voice(a, headPos, a.bubble.text, Math.max(0.6, (a.bubble.until - ms) / 1000 - 0.2), { whisper: a.bubble.whisper, loud: a.bubble.loud }); }
+    }
+    // talking: nods, a hand that helps the words along, a moving mouth
     if (talking) {
-      B.head.rotation.x = Math.sin(t * 7 + a.id) * 0.06;
-      if (!a.hand && !a.shake) { AL.sh.rotation.x += -0.5 + Math.sin(t * 3 + a.id) * 0.3; AL.el.rotation.x = -0.9; }
+      B.head.rotation.x += Math.sin(t * 5.3 + a.id) * 0.05;
+      if (!busyArms) { const gs = 0.5 + 0.5 * Math.sin(t * 2.3 + a.id); AL.sh.rotation.x += -0.35 - gs * 0.35; AL.el.rotation.x = -1.0 - gs * 0.3; AL.sh.rotation.z = -0.15 - gs * 0.2; }
+      B.mouth.scale.set(0.85, 1 + Math.abs(Math.sin(t * 16 + ph0)) * (a.bubble.whisper ? 1.5 : 4.5) * (0.4 + 0.6 * Math.abs(Math.sin(t * 4.7 + ph0))), 1);
+    } else B.mouth.scale.set(1, 1, 1);
+    // mirth at a good table, and applause when a song ends
+    if (a.sitting && partner && !talking && a.mood > 0.6 && a.drunk > 0.12 && A.laugh <= 0 && !life.fast && rnd() < dt * 0.02 && !(partner.bubble && partner.bubble.whisper)) {
+      A.laugh = 1.3; B.head.getWorldPosition(headPos); sound.laugh(a, headPos);
     }
-    // look at their partner, or at you if you're close
-    let lookYaw = null;
-    const pdx = player.x - B.root.position.x, pdz = player.z - B.root.position.z;
-    const pd = Math.hypot(pdx, pdz);
-    if (partner) lookYaw = Math.atan2(partner.x - a.x, partner.y - a.y);
-    else if (pd < 2.6) lookYaw = Math.atan2(pdx, pdz);
-    let hy = 0;
-    if (lookYaw !== null) { hy = lookYaw - B.anim.yaw; while (hy > Math.PI) hy -= Math.PI * 2; while (hy < -Math.PI) hy += Math.PI * 2; hy = clamp(hy, -1.1, 1.1); }
-    B.anim.headYaw += (hy - B.anim.headYaw) * Math.min(1, dt * 4);
-    B.head.rotation.y = B.anim.headYaw;
-    if (!partner && pd < 2.6) B.head.rotation.x = clamp((camera.position.y - (B.root.position.y + 1.55 * sc)) / pd * -0.8, -0.4, 0.3);
+    if (A.laugh > 0) {
+      A.laugh -= dt;
+      B.torso.rotation.x += -0.14 + Math.sin(t * 24) * 0.035; B.head.rotation.x -= 0.22; rootY += Math.abs(Math.sin(t * 24)) * 0.006;
+      B.mouth.scale.set(1.1, 5, 1);
+    }
+    if (A.clap > 0) { A.clap -= dt; for (const arm of B.arms) { arm.sh.rotation.x = -0.95; arm.el.rotation.x = -1.15; arm.sh.rotation.z = arm.side * -(0.2 + 0.22 * Math.abs(Math.sin(t * 13 + ph0))); } busyArms = true; }
 
-    // held things and drinking
-    const mug = a.seat && a.seat.mug && a.seat.mug.owner === a.id && a.seat.mug.level > 0.02 ? a.seat.mug : null;
-    let holdKind = a.carry && a.carry !== 'relic' ? a.carry : a.carry === 'relic' ? 'relic' : null;
-    let drinking = false;
-    if (!holdKind && a.sitting && mug && mug.kind !== 'stew') {
-      B.anim.drinkT -= dt;
-      if (B.anim.drinkT < 0) { drinking = true; if (B.anim.drinkT < -1.6) B.anim.drinkT = 6 + Math.random() * 8; }
-      if (drinking) { holdKind = mug.kind; AR.sh.rotation.x = -1.2; AR.el.rotation.x = -1.6; AR.sh.rotation.z = 0.35; B.head.rotation.x = -0.25; }
+    // where the head turns: partner, whoever is speaking nearby, you, the door, the bard, or nothing much
+    let lookYaw = null, lookPitch = 0;
+    const rx = B.root.position.x, rz = B.root.position.z;
+    const pdx = player.x - rx, pdz = player.z - rz, pd = Math.hypot(pdx, pdz);
+    const speaker = !partner && life.talkers.find((o) => o !== a && Math.hypot(o.x - a.x, o.y - a.y) < 44);
+    if (partner) { lookYaw = Math.atan2(partner.x - a.x, partner.y - a.y); lookPitch = partner.sitting === a.sitting ? 0 : a.sitting ? -0.3 : 0.25; }
+    else if (pd < 2.4) { lookYaw = Math.atan2(pdx, pdz); lookPitch = clamp((camera.position.y - (B.root.position.y + 1.55 * sc)) / Math.max(0.5, pd) * -0.8, -0.4, 0.3); }
+    else if (speaker) lookYaw = Math.atan2(speaker.x - a.x, speaker.y - a.y);
+    else if (life.doorT > 0 && a.id % 3 !== 0) lookYaw = Math.atan2(DOOR.x - rx, DOOR.z - rz);
+    else if (bard && bard !== a && (a.id + Math.floor(t / 11)) % 3 !== 0) lookYaw = Math.atan2(px2m(bard.x) - rx, px2m(bard.y - 5) - rz);
+    let hy;
+    if (lookYaw !== null) hy = clamp(wrap(lookYaw - B.anim.yaw), -1.15, 1.15);
+    else {
+      A.glanceT -= dt;
+      if (A.glanceT < 0) { A.glanceT = rf(1.5, 6); A.glance = rnd() < 0.35 ? 0 : rf(-0.75, 0.75); A.glanceP = rf(-0.08, 0.16); }
+      hy = A.glance; lookPitch = A.glanceP;
     }
-    if (a.carry === 'lute') { AL.sh.rotation.x = -0.9; AL.el.rotation.x = -1.2; AR.sh.rotation.x = -0.6; AR.el.rotation.x = -1.0 + (G.music.playing && G.music.bard === a ? Math.sin(t * 12) * 0.25 : 0); }
+    A.headYaw += (hy - A.headYaw) * Math.min(1, dt * 4);
+    A.headPitch += (lookPitch - A.headPitch) * Math.min(1, dt * 4);
+    B.neck.rotation.y = A.headYaw * 0.35; B.head.rotation.y = A.headYaw * 0.65;
+    B.head.rotation.x += A.headPitch;
+    if (!busyArms && !talking && !a.sitting && !moving) {       // now and then, a hand to the chin
+      A.fidget -= dt;
+      if (A.fidget < 0) { AL.sh.rotation.x = -0.55; AL.el.rotation.x = -2.0; AL.sh.rotation.z = 0.15; if (A.fidget < -2.2) A.fidget = rf(7, 18); }
+    }
+
+    // held things, drinking and eating
+    let holdKind = a.carry || null;
+    if (!holdKind && a.sitting && mug && A.laugh <= 0 && !(A.clap > 0)) {
+      if (mug.kind === 'stew') {
+        const cyc = (t * 0.42 + ph0) % 1;
+        if (cyc < 0.5 && !talking) { const up = Math.sin((cyc / 0.5) * Math.PI); AR.sh.rotation.x = -0.75 - up * 0.45; AR.el.rotation.x = -1.0 - up * 0.9; AR.sh.rotation.z = 0.1 + up * 0.25; B.head.rotation.x += 0.12 + up * 0.08; B.torso.rotation.x += 0.08; }
+      } else {
+        A.drinkT -= dt;
+        if (A.drinkT < 0) { drinking = true; if (A.drinkT < -1.8) A.drinkT = (talking || partner ? 7 : 5) + Math.random() * 9; }
+        if (drinking) { holdKind = mug.kind; AR.sh.rotation.x = -1.2; AR.el.rotation.x = -1.6; AR.sh.rotation.z = 0.35; B.head.rotation.x = -0.25; B.mouth.scale.set(1, 1, 1); }
+      }
+    }
+    if (a.carry === 'lute') {
+      const playing = bard === a;
+      AL.sh.rotation.x = -0.9; AL.el.rotation.x = -1.2; AR.sh.rotation.x = -0.6; AR.el.rotation.x = -1.0 + (playing ? Math.sin(t * 12) * 0.25 : 0);
+      if (playing) { B.torso.rotation.z += Math.sin(t * 1.6) * 0.05; B.head.rotation.x += Math.sin(t * 3.2) * 0.05; R.knee.rotation.x += Math.max(0, Math.sin(t * 6.4)) * 0.2; B.head.getWorldPosition(headPos); sound.lute(headPos); }
+    }
     if (B.heldKind !== holdKind) {
       if (B.held) B.held.parent.remove(B.held);
       B.held = holdKind ? makeItem(holdKind === 'empty' ? 'mug' : holdKind) : null;
@@ -465,33 +740,58 @@ function syncPeople(dt, t) {
       }
     }
     if (B.held && B.held.userData.flameAt) {
-      B.held.userData.flame ||= (() => { const f = sprite(flameTex, 0.06); f.position.y = B.held.userData.flameAt; f.center.set(0.5, 0.15); B.held.add(f); return f; })();
-    }
-    // the mug on the table, unless it's in hand right now
-    if (a.seat && a.seat.mug && !(drinking && mug === a.seat.mug)) {
-      /* drawn by syncTable */
+      B.held.userData.flame ||= (() => { const f = sprite(flameTex, 0.06, hot('#ffffff', 2)); f.position.y = B.held.userData.flameAt; f.center.set(0.5, 0.15); B.held.add(f); return f; })();
     }
     a._drinking = drinking;
+
+    // eyes: blink, and droop with drink
+    A.blinkT -= dt;
+    if (A.blinkT < -0.11) A.blinkT = rf(1.4, 5.5);
+    const lid = A.blinkT < 0 ? 0.1 : a.sick ? 0.4 : a.drunk > 0.7 ? 0.55 : A.laugh > 0 ? 0.35 : 1;
+    for (const e of B.eyes) e.scale.y = lid;
+
+    // ease every joint toward its pose so nothing snaps
+    if (a.sitting !== B.wasSitting) { if (B.wasSitting !== undefined && !B.fresh && !life.fast) sound.scrape({ x: tx, z: tz }); B.wasSitting = a.sitting; }
+    if (B.fresh) B.root.position.set(tx, rootY, tz);
+    else { const kp = a.sitting || !moving ? Math.min(1, dt * 6) : 1; B.root.position.x += (tx - B.root.position.x) * kp; B.root.position.z += (tz - B.root.position.z) * kp; B.root.position.y += (rootY - B.root.position.y) * Math.min(1, dt * 9); }
+    for (let i = 0; i < B.joints.length; i++) {
+      const j = B.joints[i].rotation, p = B.prev[i];
+      if (B.fresh) p.set(j.x, j.y, j.z);
+      else { p.x += (j.x - p.x) * k; p.y += (j.y - p.y) * k; p.z += (j.z - p.z) * k; j.set(p.x, p.y, p.z); }
+    }
+    B.fresh = false;
+    B.blob.position.set(B.root.position.x, elev + 0.012, B.root.position.z);
+    const bs = (a.sitting ? 0.95 : 0.7) * sc; B.blob.scale.set(bs, bs, 1);
+
+    // steam from a bowl, smoke from a pipe
+    if (!G.reduced && !life.fast) {
+      if (mug && mug.kind === 'stew' && rnd() < dt * 2.2) puff(px2m(a.seat.item[0]), (a.seat.bar ? 1.11 : 0.78) + 0.06, px2m(a.seat.item[1] + 2), { life: 1.6, vy: 0.22, s0: 0.05, s1: 0.22, op: 0.16, col: '#e8e4dc' });
+      if (a.pipe && a.sitting && rnd() < dt * 0.9) { B.head.getWorldPosition(headPos); puff(headPos.x + Math.sin(B.anim.yaw) * 0.2, headPos.y, headPos.z + Math.cos(B.anim.yaw) * 0.2, { life: 4, vy: 0.14, s0: 0.05, s1: 0.5, op: 0.2, col: '#b4b0b8' }); }
+    }
   }
   syncTable();
   for (const it of tableItems.values()) if (!it.userData.seen) it.visible = false;
 }
 function syncTable() {
   for (const s of seats) {
-    if (!s.mug) continue;
+    if (!s.mug) { s._mug = null; continue; }
+    const ix = px2m(s.item[0]), iz = px2m(s.item[1] + 2), iy = s.bar ? 1.11 : 0.78;
+    if (s._mug !== s.mug) { s._mug = s.mug; if (!life.fast) sound.clunk({ x: ix, y: iy, z: iz }); }
     const occ = s.occupant;
     if (occ && occ._drinking && s.mug.owner === occ.id) continue;
     const k = s.mug.level > 0.02 ? s.mug.kind : 'empty';
-    const ix = px2m(s.item[0]), iz = px2m(s.item[1] + 2);
-    placeItem('seat' + s.id, k, s.bar ? ix : ix, s.bar ? 1.11 : 0.78, iz);
+    placeItem('seat' + s.id, k, ix, iy, iz);
   }
   for (const t of tables) t.extra.forEach((e, i) => { const it = placeItem(`tx${t.id}${i}`, e, (t.x + 0.3 + i * 0.25) * S, 0.78, (t.y + 0.55) * S); if (it.userData.spin) it.userData.spin.rotation.y += 0.02; });
   G.items.forEach((e, i) => placeItem('item' + i, e.kind, px2m(e.x), 0.78, px2m(e.y)));
 }
 
 // ------------------------------------------------------------------ you
-const player = { x: 15.5 * S, z: 13.2 * S, yaw: 0.62, pitch: -0.08, bob: 0, elev: 0 };
+const player = { x: 15.5 * S, z: 13.2 * S, yaw: 0.62, pitch: -0.08, bob: 0, elev: 0, vx: 0, vz: 0, sit: null, eye: 1.62, back: null, stepI: 0, lean: 0 };
 const keys = new Set();
+// your own shadow, thrown across the boards by the fire
+const shade = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 1.1, 3, 8), new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false }));
+shade.castShadow = true; shade.frustumCulled = false; scene.add(shade);
 function blockedAt(x, z) {
   const tx = Math.floor(x / S), tz = Math.floor(z / S);
   if (!kind[tz] || kind[tz][tx] === undefined) return true;
@@ -508,6 +808,30 @@ function canStand(x, z) {
   if (on(player.x, player.z) !== on(x, z) && Math.floor(Math.max(z, player.z) / S) !== 10 && Math.floor(Math.min(z, player.z) / S) !== 9) return false;
   return true;
 }
+// chairs, barrels and people are round things you slide around rather than walk through
+function pushOut(x, z) {
+  const push = (cx, cz, r) => { const dx = x - cx, dz = z - cz, d = Math.hypot(dx, dz); if (d < r && d > 0.001) { x = cx + (dx / d) * r; z = cz + (dz / d) * r; } };
+  for (const s of props.solids) push(s.x, s.z, s.r + 0.2);
+  for (const s of seats) if (!s.stool || s.occupant) push((s.x + 0.5) * S, (s.y + 0.5) * S, 0.4);
+  for (const [a, b] of bodies) if (a.present && a.kind === 'person' && !a.sitting) push(b.root.position.x, b.root.position.z, 0.46);
+  return [x, z];
+}
+function nearSeat() {
+  let best = null, bd = 1.05;
+  for (const s of seats) {
+    if (s.occupant || s.reserved) continue;
+    const d = Math.hypot((s.x + 0.5) * S - player.x, (s.y + 0.5) * S - player.z);
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best;
+}
+function toggleSit() {
+  if (player.sit) { player.sit.reserved = null; player.sit = null; if (player.back) { player.x = player.back.x; player.z = player.back.z; } sound.scrape(player); return; }
+  const s = nearSeat();
+  if (!s) return;
+  player.back = { x: player.x, z: player.z }; player.sit = s; s.reserved = player; player.vx = player.vz = 0;
+  sound.scrape(player);
+}
 function movePlayer(dt) {
   let f = 0, s = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) f += 1;
@@ -516,61 +840,38 @@ function movePlayer(dt) {
   if (keys.has('KeyD') || keys.has('ArrowRight')) s += 1;
   f += touch.move.y; s += touch.move.x;
   const len = Math.hypot(f, s);
+  if (player.sit) {
+    const st = player.sit;
+    if (st.occupant || (st.reserved && st.reserved !== player)) { player.sit = null; if (st.reserved === player) st.reserved = null; if (player.back) { player.x = player.back.x; player.z = player.back.z; } return; }
+    const k = Math.min(1, dt * 5);
+    player.x += ((st.x + 0.5) * S - player.x) * k; player.z += ((st.y + 0.5) * S - player.z) * k;
+    player.eye += (st.h + 0.74 - player.eye) * k; player.elev += (0 - player.elev) * k;
+    if (len > 0.6 && Math.hypot((st.x + 0.5) * S - player.x, (st.y + 0.5) * S - player.z) < 0.1) toggleSit();
+    return;
+  }
+  player.eye += (1.62 - player.eye) * Math.min(1, dt * 5);
   const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 2.6 : 1.5;
+  let wx = 0, wz = 0;
   if (len > 0.05) {
     f /= Math.max(1, len); s /= Math.max(1, len);
     const sin = Math.sin(player.yaw), cos = Math.cos(player.yaw);
-    const vx = (-sin * f + cos * s) * speed * dt, vz = (-cos * f - sin * s) * speed * dt;
-    if (canStand(player.x + vx, player.z)) player.x += vx;
-    if (canStand(player.x, player.z + vz)) player.z += vz;
-    player.bob += dt * speed * 5.5;
+    wx = (-sin * f + cos * s) * speed; wz = (-cos * f - sin * s) * speed;
   }
+  // a body has weight: ease into a walk and out of it
+  const acc = Math.min(1, dt * (len > 0.05 ? 7 : 9));
+  player.vx += (wx - player.vx) * acc; player.vz += (wz - player.vz) * acc;
+  const ox = player.x, oz = player.z;
+  if (canStand(player.x + player.vx * dt, player.z)) player.x += player.vx * dt; else player.vx = 0;
+  if (canStand(player.x, player.z + player.vz * dt)) player.z += player.vz * dt; else player.vz = 0;
+  const [qx, qz] = pushOut(player.x, player.z);
+  if ((qx !== player.x || qz !== player.z) && canStand(qx, qz)) { player.x = qx; player.z = qz; }
+  const moved = Math.hypot(player.x - ox, player.z - oz);
+  player.bob += moved * 3.6;
+  player.lean += (s * 0.012 * (moved > 0.0005 ? 1 : 0) - player.lean) * Math.min(1, dt * 5);
+  const si = Math.floor(player.bob / Math.PI);
+  if (si !== player.stepI) { player.stepI = si; sound.step(null, surfaceAt(player.x, player.z), speed > 2 ? 1.2 : 0.9); }
   const onStairs = kind[Math.floor(player.z / S)]?.[Math.floor(player.x / S)] === 'stairs';
   player.elev = lerp(player.elev, onStairs ? stairElev(player.z) : 0, Math.min(1, dt * 10));
-}
-
-// ------------------------------------------------------------------ sound
-const audio = { on: false };
-function startAudio() {
-  Sfx.spatial = true;
-  Sfx.setOn(true);
-  const ctx = Sfx.ctx;
-  if (!ctx || audio.on) return;
-  audio.on = true;
-  const panner = (p, ref = 1.2) => {
-    const n = new THREE.Vector3().copy(p);
-    const pn = ctx.createPanner();
-    pn.panningModel = 'HRTF'; pn.distanceModel = 'inverse'; pn.refDistance = ref; pn.rolloffFactor = 1.3;
-    pn.positionX.value = n.x; pn.positionY.value = n.y; pn.positionZ.value = n.z;
-    pn.connect(Sfx.out);
-    return pn;
-  };
-  const loop = (type, freq, q, dest) => {
-    const src = ctx.createBufferSource(); src.buffer = Sfx.noise; src.loop = true;
-    const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
-    const g = ctx.createGain(); g.gain.value = 0;
-    src.connect(f).connect(g).connect(dest); src.start(ctx.currentTime, Math.random() * 1.5);
-    return g;
-  };
-  const fp = panner(HEARTH, 1.0);
-  audio.fire = loop('lowpass', 420, 0.7, fp);
-  Sfx.fireOut = fp;
-  audio.rain = windows.map((w) => loop('bandpass', 2600, 0.5, panner(new THREE.Vector3(w.cx, w.cy, Z0), 1.5)));
-  audio.rain.push(loop('highpass', 3000, 0.4, panner(new THREE.Vector3(13 * S, 1.2, Z1), 1.5)));
-  Sfx.luteOut = panner(new THREE.Vector3(3.5 * S, 1.2, 3 * S), 2.2);
-}
-function updateAudio() {
-  if (!audio.on) return;
-  const ctx = Sfx.ctx, l = ctx.listener, t = ctx.currentTime;
-  const p = camera.position, dir = new THREE.Vector3(); camera.getWorldDirection(dir);
-  if (l.positionX) {
-    l.positionX.value = p.x; l.positionY.value = p.y; l.positionZ.value = p.z;
-    l.forwardX.value = dir.x; l.forwardY.value = dir.y; l.forwardZ.value = dir.z;
-    l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
-  } else { l.setPosition(p.x, p.y, p.z); l.setOrientation(dir.x, dir.y, dir.z, 0, 1, 0); }
-  audio.fire.gain.setTargetAtTime(0.18 + 0.3 * G.fire, t, 0.4);
-  const rv = G.weather === 'storm' ? 0.16 : G.weather === 'rain' ? 0.09 : 0;
-  for (const g of audio.rain) g.gain.setTargetAtTime(rv, t, 1);
 }
 
 // ------------------------------------------------------------------ HUD, captions, input
@@ -598,18 +899,45 @@ function toast(text) {
 }
 on('toast', ({ text }) => toast(text));
 
+// people notice you: a word of greeting the first time you come close and catch their eye
+const greeted = new Set();
+let greetT = 4;
+function greetings(dt) {
+  greetT -= dt;
+  if (greetT > 0) return;
+  greetT = 0.5;
+  for (const [a, b] of bodies) {
+    if (!a.present || a.kind !== 'person' || greeted.has(a.id + ':' + G.day) || a.convo || a.busy || a.sick || a.role === 'stranger' || (a.bubble && performance.now() < a.bubble.until)) continue;
+    const dx = player.x - b.root.position.x, dz = player.z - b.root.position.z, d = Math.hypot(dx, dz);
+    if (d > 1.7 || Math.abs(wrap(Math.atan2(dx, dz) - b.anim.yaw)) > 1.2) continue;
+    // and you are looking back at them
+    if (Math.abs(wrap(Math.atan2(-dx, -dz) - (player.yaw + Math.PI))) > 0.6) continue;
+    greeted.add(a.id + ':' + G.day);
+    if (rnd() < 0.3) continue;
+    const wet = G.weather !== 'clear';
+    const lines = a.role === 'keeper' ? ['Evening. Find a seat, I\'ll be round.', 'Welcome in. Mind the cat.', wet ? 'Shut that door behind you, it\'s foul out.' : 'Come in, come in. Fire\'s lit.']
+      : ['Evening.', 'Evening, stranger.', wet ? 'Foul night to be on the road.' : 'Fine evening for it.', 'Hm? Oh. Evening.', 'New face. Welcome.', a.drunk > 0.5 ? 'Heh. Hello, you.' : 'Well met.'];
+    speak(a, lines[Math.floor(rnd() * lines.length)]);
+    greetT = 6;
+    break;
+  }
+}
+
 const touch = { move: { x: 0, y: 0 }, id: null, lookId: null, sx: 0, sy: 0, lx: 0, ly: 0 };
-let entered = false, locked = false;
+let entered = false, locked = false, fadeT = 0;
 function enter(withSound) {
   $('#intro').hidden = true;
   entered = true;
   G.paused = false;
   if (withSound) startAudio();
+  if (withSound && Sfx.on) setTimeout(() => Sfx.door(), 60);
   if (!matchMedia('(pointer: coarse)').matches) canvas.requestPointerLock?.()?.catch?.(() => {});
+  setTimeout(() => $('#hint').classList.add('gone'), 14000);
 }
 $('#enterSound').addEventListener('click', () => enter(true));
 $('#enterQuiet').addEventListener('click', () => enter(false));
-$('#again').addEventListener('click', () => { $('#dawn').hidden = true; startDay(G.day + 1); G.paused = false; captions.length = 0; });
+$('#act').addEventListener('click', () => toggleSit());
+$('#again').addEventListener('click', () => { $('#dawn').hidden = true; if (player.sit) toggleSit(); startDay(G.day + 1); G.paused = false; captions.length = 0; });
 document.addEventListener('pointerlockchange', () => { locked = document.pointerLockElement === canvas; $('#hint').classList.toggle('dim', locked); });
 canvas.addEventListener('click', () => { if (entered && !locked && !matchMedia('(pointer: coarse)').matches) canvas.requestPointerLock?.()?.catch?.(() => {}); });
 let dragging = false;
@@ -621,8 +949,10 @@ window.addEventListener('mousemove', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
-  if (e.code === 'KeyM') { if (!audio.on) startAudio(); else Sfx.setOn(!Sfx.on); }
+  if (e.repeat) return;
+  if (e.code === 'KeyM') { if (!sound.on) startAudio(); else Sfx.setOn(!Sfx.on); }
   if (e.code === 'KeyQ') { quality.high = !quality.high; applyQuality(); toast(quality.high ? 'High quality' : 'Low quality: faster on older machines'); }
+  if (e.code === 'KeyE' && entered) toggleSit();
   if (e.code === 'Space') { e.preventDefault(); G.paused = !G.paused; }
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
@@ -658,6 +988,8 @@ canvas.addEventListener('touchcancel', touchEnd);
 function applyQuality() {
   renderer.shadowMap.enabled = quality.high;
   fireLight.castShadow = quality.high;
+  fx.enabled = quality.high;
+  for (const h of haze) h.visible = quality.high;
   scene.traverse((o) => { if (o.material) o.material.needsUpdate = true; });
   resize();
 }
@@ -677,79 +1009,145 @@ function lookTarget() {
 }
 
 // ------------------------------------------------------------------ frame
-let last = performance.now(), fpsT = 0, fpsN = 0, autoQ = false, uiT = 0;
+let last = performance.now(), fpsT = 0, fpsN = 0, autoQ = /[?&]hq\b/.test(location.search), uiT = 0, kick = 0, doorWas = false;
+const nightTint = new THREE.Color(), tmpC = new THREE.Color();
 function frame(nowMs) {
   const dt = Math.min(0.1, (nowMs - last) / 1000); last = nowMs;
   const t = nowMs / 1000;
+  life.fast = keys.has('KeyF');
   if (!G.paused) {
-    let sdt = dt * (keys.has('KeyF') ? 12 : 1);
+    let sdt = dt * (life.fast ? 12 : 1);
     while (sdt > 0) { const s = Math.min(0.25, sdt); update(s); sdt -= s; }
   }
-  if (entered) movePlayer(dt);
+  G.particles.length = 0;       // the 2D view's sparks and notes; this room draws its own
+  if (entered) { movePlayer(dt); if (!G.paused) greetings(dt); }
   G.sel = null;
   G.ear = { x: m2px(player.x), y: m2px(player.z) - 3 };
 
-  // camera
-  const bob = Math.sin(player.bob) * 0.025, sway = Math.sin(t * 0.6) * 0.004;
-  camera.position.set(player.x, 1.62 + player.elev + bob, player.z);
-  camera.rotation.set(player.pitch + sway, player.yaw, 0, 'YXZ');
+  // camera: a walking head bobs, rolls a little into its turns, and is never perfectly still
+  const still = G.reduced ? 0 : 1;
+  const bob = Math.sin(player.bob * 2) * 0.022 * still, sway = Math.sin(t * 0.6) * 0.004 * still;
+  camera.position.set(player.x + Math.cos(player.yaw) * Math.sin(player.bob) * 0.012 * still, player.eye + player.elev + bob + Math.sin(t * 1.3) * 0.003 * still, player.z - Math.sin(player.yaw) * Math.sin(player.bob) * 0.012 * still);
+  camera.rotation.set(player.pitch + sway, player.yaw, -player.lean * still, 'YXZ');
+  shade.position.set(player.x, player.eye - 0.75 + player.elev, player.z);
+  shade.scale.y = player.sit ? 0.6 : 1;
 
   // time of day
   const h = hourOf(G.t);
   const sky = skyAt(h);
-  hemi.intensity = 0.06 + sky.day * 0.55;
-  hemi.color.setRGB(...sky.amb.map((v) => clamp(v / 200, 0, 1.2)));
-  sun.intensity = sky.day * 0.7;
+  const clear = G.weather === 'clear', storm = G.weather === 'storm';
+  const moon = clear && (h >= 19.5 || h < 6) ? 1 : 0;
+  hemi.intensity = 0.11 + sky.day * 0.5;
+  hemi.color.setRGB(...sky.amb.map((v) => clamp(v / 200, 0, 1.2))).lerp(nightTint.set('#8a9ac8'), (1 - sky.day) * 0.5);
+  sun.intensity = sky.day * 0.6;
   scene.fog.color.setRGB(0.1 + sky.day * 0.18, 0.07 + sky.day * 0.15, 0.045 + sky.day * 0.12);
-  scene.fog.density = 0.022 + (1 - sky.day) * 0.012;
-  for (const w of windows) { drawWindow(w, sky, h, t); w.shaft.material.opacity = sky.day * 0.07; }
+  scene.fog.density = 0.02 + (1 - sky.day) * 0.01;
   if (G.flash > 0) G.flash = Math.max(0, G.flash - dt * 2.5);
-  lightning.intensity = G.reduced ? 0 : G.flash * 3;
+  const flash = G.reduced ? 0 : G.flash;
+  lightning.intensity = flash * 3;
+  for (const w of windows) {
+    w.acc += dt;
+    if (w.acc > 0.08) { drawWindow(w, sky, h, t, w.acc); w.acc = 0; }
+    w.glass.material.color.setScalar(1 + sky.day * 1.3 + flash * 3);
+    // gold at dusk, silver under a clear moon, white for an instant in a storm
+    tmpC.setRGB(1, 0.8, 0.52).multiplyScalar(sky.day * 0.9).add(nightTint.setRGB(0.5, 0.62, 1).multiplyScalar(moon * 0.22 + flash * 1.5 + (1 - sky.day) * 0.05));
+    w.poolMat.color.copy(tmpC); w.poolMat.opacity = 0.4;
+    w.shaftMat.color.copy(tmpC); w.shaftMat.opacity = 0.014 * clamp(sky.day * 1.5 + flash, 0, 1);
+  }
+
+  // the door opens for anyone near it, and the night comes in with them
+  const near = life.hold || G.agents.some((a) => a.present && a.kind === 'person' && a.ty >= 14 && a.tx >= 11 && a.tx <= 14);
+  door.rotation.y = lerp(door.rotation.y, near ? -1.5 : 0, Math.min(1, dt * (near ? 4 : 2.2)));
+  const open = clamp(-door.rotation.y / 1.5, 0, 1);
+  if (near && !doorWas) life.doorT = 2.6;
+  doorWas = near; life.doorT -= dt;
+  outsideMat.color.setRGB(0.16 + sky.day * 0.9 + flash, 0.19 + sky.day * 0.85 + flash, 0.3 + sky.day * 0.7 + flash);
+  laneGlow.color.setScalar((1 - sky.day) * 1.6);
+  doorPool.material.opacity = open * (0.1 + sky.day * 0.5 + moon * 0.12 + flash);
+  rainOut.visible = !clear && open > 0.03;
+  if (rainOut.visible) {
+    const arr = rainOut.geometry.attributes.position.array, d = rainOut.userData.d;
+    for (let i = 0; i < d.length; i++) {
+      const p = d[i]; p[1] -= p[3] * dt; if (p[1] < 0) { p[1] = 3.2; p[0] = 8.6 + Math.random() * 4.4; }
+      arr[i * 6] = p[0]; arr[i * 6 + 1] = p[1]; arr[i * 6 + 2] = p[2]; arr[i * 6 + 3] = p[0] + 0.03; arr[i * 6 + 4] = p[1] + 0.22; arr[i * 6 + 5] = p[2];
+    }
+    rainOut.geometry.attributes.position.needsUpdate = true;
+  }
+  const draft = G.reduced ? 0 : Math.max(open, storm ? (sound.gust || 0) * 0.5 : 0);
 
   // fire
   const fire = G.fire;
-  const flick = G.reduced ? 1 : 1 + 0.12 * Math.sin(t * 11) + 0.08 * Math.sin(t * 17.3) + 0.06 * Math.sin(t * 5.1);
+  kick = Math.max(0, kick - dt * 3);
+  if (!G.reduced && rnd() < dt * 0.6 * fire) kick = rf(0.1, 0.3);
+  const flick = G.reduced ? 1 : 1 + 0.1 * Math.sin(t * 11) + 0.08 * Math.sin(t * 17.3) + 0.06 * Math.sin(t * 5.1) + 0.05 * Math.sin(t * 29.7) + kick - draft * 0.12 * Math.sin(t * 23);
   fireLight.intensity = (12 + 26 * fire) * flick;
-  fireLight.position.x = 8.0 + (G.reduced ? 0 : Math.sin(t * 7) * 0.04);
+  fireLight.position.x = 8.0 + (G.reduced ? 0 : Math.sin(t * 7) * 0.05 + Math.sin(t * 13.1) * 0.03);
+  fireLight.position.y = 0.7 + (G.reduced ? 0 : Math.sin(t * 9.3) * 0.04);
   fireGlow.material.opacity = 0.3 + 0.35 * fire * flick;
+  embers.material.opacity = clamp(0.5 + 0.4 * fire + (G.reduced ? 0 : 0.15 * Math.sin(t * 2.1) + 0.1 * Math.sin(t * 3.7)), 0, 1);
   for (const f of flames) {
-    const u = f.userData, k = (t * 0.8 + u.ph) % 1;
-    const hgt = (0.35 + 0.55 * fire) * (1 - k * 0.6) * (0.8 + 0.3 * Math.sin(t * u.sp + u.ph));
+    const u = f.userData, kk = (t * 0.8 + u.ph) % 1;
+    const hgt = (0.35 + 0.55 * fire) * (1 - kk * 0.6) * (0.8 + 0.3 * Math.sin(t * u.sp + u.ph));
     f.scale.set(hgt * 0.55, hgt, 1);
     f.position.set(HEARTH.x + u.x * (0.7 + 0.3 * fire) + Math.sin(t * 3 + u.ph) * 0.03, 0.18, HEARTH.z + u.z);
     f.material.opacity = 0.55 + 0.35 * Math.sin(t * u.sp + u.ph);
   }
   const sp = sparkGeo.attributes.position.array;
   for (let i = 0; i < SPARKS; i++) {
-    sparkLife[i] += dt * (0.4 + fire * 0.5);
-    if (sparkLife[i] > 1) { sparkLife[i] = 0; sp[i * 3] = HEARTH.x + (Math.random() - 0.5) * 0.6; sp[i * 3 + 2] = HEARTH.z + (Math.random() - 0.5) * 0.2; }
-    sp[i * 3 + 1] = 0.25 + sparkLife[i] * 1.1;
-    sp[i * 3] += Math.sin(t * 5 + i) * 0.003;
+    sparkLife[i] += dt * (0.35 + fire * 0.5);
+    if (sparkLife[i] > 1) { sparkLife[i] = 0; sp[i * 3] = HEARTH.x + (Math.random() - 0.5) * 0.6; sp[i * 3 + 2] = HEARTH.z + (Math.random() - 0.5) * 0.2; sparkV[i][0] = (Math.random() - 0.5) * 0.25; sparkV[i][1] = Math.random() < 0.12 ? 0.5 + Math.random() * 0.5 : 0; }
+    sp[i * 3 + 1] = 0.25 + sparkLife[i] * 1.1 - sparkV[i][1] * sparkLife[i] * sparkLife[i] * 1.2;
+    sp[i * 3] += (Math.sin(t * 5 + i) * 0.16 + sparkV[i][0]) * dt;
+    sp[i * 3 + 2] += sparkV[i][1] * dt * 0.9;       // now and then one spits out onto the hearthstone
   }
   sparkGeo.attributes.position.needsUpdate = true;
+  if (!G.reduced && rnd() < dt * (2 + fire * 3)) puff(HEARTH.x + rf(-0.35, 0.35), 0.75, HEARTH.z - 0.05, { life: 1.3, vy: 0.75, s0: 0.25, s1: 0.6, op: 0.22, col: '#3a332e' });
   const dp = dustGeo.attributes.position.array;
-  for (let i = 0; i < DUST; i++) { dp[i * 3 + 1] += Math.sin(t * 0.3 + i) * 0.0008; dp[i * 3] += Math.cos(t * 0.2 + i * 1.3) * 0.0006; }
+  for (let i = 0; i < DUST; i++) { dp[i * 3 + 1] += Math.sin(t * 0.3 + i) * 0.0008; dp[i * 3] += Math.cos(t * 0.2 + i * 1.3) * 0.0006 + draft * 0.0012; if (dp[i * 3] > X1) dp[i * 3] = X0; }
   dustGeo.attributes.position.needsUpdate = true;
+  dust.material.opacity = 0.22 + 0.25 * sky.day;
+  for (const p of puffs) {
+    if (!p.sp.visible) continue;
+    p.life += dt;
+    const q = p.life / p.max;
+    if (q >= 1) { p.sp.visible = false; continue; }
+    p.sp.position.x += (p.vx + Math.sin(t * 1.3 + p.max * 9) * 0.03 + draft * 0.15) * dt; p.sp.position.y += p.vy * dt; p.sp.position.z += p.vz * dt;
+    const sz = lerp(p.s0, p.s1, q); p.sp.scale.set(sz, sz, 1);
+    p.sp.material.opacity = p.op * Math.min(1, q * 5) * (1 - q);
+  }
+  for (const hz of haze) {
+    const u = hz.userData;
+    hz.position.set(u.x + Math.sin(t * 0.05 + u.ph) * 1.2, u.y + Math.sin(t * 0.08 + u.ph * 2) * 0.15, u.z + Math.cos(t * 0.04 + u.ph) * 0.9);
+    const dF = Math.hypot(hz.position.x - HEARTH.x, hz.position.z - HEARTH.z);
+    hz.material.opacity = (0.018 + 0.05 * fire * flick / (1 + dF * 0.35)) + sky.day * 0.012;
+  }
+  kitchenGlow.color.setScalar(G.closing >= 3 ? 0.25 : 1.5 + (G.reduced ? 0 : 0.25 * Math.sin(t * 6.3) + 0.15 * Math.sin(t * 14.1)));
+  kitchenPool.material.opacity = G.closing >= 3 ? 0.04 : 0.22 + (G.reduced ? 0 : 0.05 * Math.sin(t * 6.3));
 
   // candles, sconces, lanterns follow the simulation (the pot-boy lights them)
   for (const l of lamps) {
     const lit = l.f.lit;
-    const fl = G.reduced ? 1 : 1 + 0.1 * Math.sin(t * 13 + l.phase) + 0.05 * Math.sin(t * 23 + l.phase);
-    l.light.intensity = lit && quality.high ? l.base * fl : lit ? l.base * 0.7 : 0;
-    l.fl.visible = l.gl.visible = lit;
-    l.fl.scale.set(0.05 * fl, 0.09 * fl, 1);
-    if (l.g.userData.glass) l.g.userData.glass.material.emissiveIntensity = lit ? 1.2 : 0;
+    if (lit !== l.was) { if (!lit && l.was && !G.reduced) for (let i = 0; i < 3; i++) puff(l.pos.x, l.pos.y + l.g.userData.flameY + 0.03, l.pos.z, { life: 2.2 + i * 0.5, vy: 0.3, s0: 0.03, s1: 0.3, op: 0.3, col: '#c8c4c0' }); l.was = lit; }
+    l.on += ((lit ? 1 : 0) - l.on) * Math.min(1, dt * (lit ? 2.5 : 8));
+    const amp = 1 + draft * 3.5;
+    const fl = G.reduced ? 1 : Math.max(0.35, 1 + amp * (0.1 * Math.sin(t * 13 + l.phase) + 0.05 * Math.sin(t * 23 + l.phase)));
+    l.light.intensity = l.base * l.on * (quality.high ? fl : 0.7);
+    l.fl.visible = l.gl.visible = l.on > 0.02;
+    l.fl.scale.set(0.05 * fl * l.on, 0.09 * fl * l.on, 1);
+    l.fl.material.rotation = G.reduced ? 0 : Math.sin(t * 9 + l.phase) * 0.12 * amp - draft * 0.3;
+    l.gl.material.opacity = 0.5 * l.on * fl;
+    if (l.g.userData.glass) l.g.userData.glass.material.emissiveIntensity = 1.3 * l.on;
   }
 
-  // the door opens for anyone near it
-  const near = G.agents.some((a) => a.present && a.kind === 'person' && a.ty >= 14 && a.tx >= 11 && a.tx <= 14);
-  door.rotation.y = lerp(door.rotation.y, near ? -1.5 : 0, Math.min(1, dt * 4));
-  outside.material.color.set(sky.day > 0.3 ? sky.bot : '#0b0f1a');
-
   syncPeople(dt, t);
-  updateAudio();
+  camera.getWorldDirection(camDir);
+  sound.listener(camera.position, camDir);
+  sound.update(dt, { door: open, hour: h, fast: life.fast, cat: life.cat, catNear: life.cat && Math.hypot(life.cat.x - player.x, life.cat.z - player.z) < 1.5 });
   Sfx.update(dt);
-  renderer.render(scene, camera);
+  if (fadeT < 1 && entered) fadeT = Math.min(1, fadeT + dt / (G.reduced ? 0.01 : 2.2));
+  fx.uniforms.fade.value = fadeT * fadeT * (3 - 2 * fadeT);
+  fx.uniforms.grain.value = G.reduced ? 0.015 : 0.035;
+  fx.render(scene, camera, t, !G.reduced);
 
   // HUD
   uiT += dt;
@@ -758,6 +1156,9 @@ function frame(nowMs) {
     $('#clock').textContent = `${fmtTime(G.t)} · ${{ clear: 'clear', rain: 'rain', storm: 'storm' }[G.weather]}${G.paused && entered ? ' · paused' : ''}`;
     const who = entered ? lookTarget() : null;
     $('#look').innerHTML = who ? `<b>${esc(who.name)}</b><span>${esc(who.activity || who.title)}</span>` : '';
+    const act = $('#act'), can = entered && (player.sit || nearSeat());
+    act.hidden = !can;
+    if (can) act.textContent = player.sit ? 'Stand up' : 'Sit down';
     renderCaptions();
   }
   // drop to low quality automatically if the machine is struggling
@@ -768,26 +1169,70 @@ function frame(nowMs) {
   requestAnimationFrame(frame);
 }
 
-function drawWindow(w, sky, h, t) {
-  const g = w.g;
-  const gr = g.createLinearGradient(0, 0, 0, 128);
+// What you see through the glass: sky, weather, and the roofs of the town.
+function drawWindow(w, sky, h, t, dt) {
+  const g = w.g, W = 256, HH = 192;
+  const night = h >= 19.5 || h < 6, clear = G.weather === 'clear', storm = G.weather === 'storm';
+  const gr = g.createLinearGradient(0, 0, 0, HH * 0.75);
   gr.addColorStop(0, sky.top); gr.addColorStop(1, sky.bot);
-  g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
-  if ((h >= 19.5 || h < 6) && G.weather === 'clear') {
-    const r = mulberry(7);
-    for (let i = 0; i < 22; i++) { g.fillStyle = `rgba(230,230,255,${(0.35 + 0.4 * Math.abs(Math.sin(t * (0.3 + r() * 0.5) + i))).toFixed(2)})`; g.fillRect(Math.floor(r() * 128), Math.floor(r() * 80), 1, 1); }
-    g.fillStyle = '#e8e4cc'; g.beginPath(); g.arc(96, 26, 7, 0, 7); g.fill(); g.fillStyle = sky.top; g.beginPath(); g.arc(100, 23, 6, 0, 7); g.fill();
-  }
-  if (G.weather !== 'clear') {
-    g.fillStyle = 'rgba(160,180,210,.18)'; g.fillRect(0, 0, 128, 128);
-    g.strokeStyle = 'rgba(190,210,235,.55)'; g.lineWidth = 1;
-    for (const d of w.drops) {
-      d[1] += d[2] * (G.weather === 'storm' ? 3 : 2);
-      if (d[1] > 128) { d[1] = -10; d[0] = Math.random() * 128; }
-      g.beginPath(); g.moveTo(d[0], d[1]); g.lineTo(d[0] - 1, d[1] + 6); g.stroke();
+  g.fillStyle = gr; g.fillRect(0, 0, W, HH);
+  if (night && clear) {
+    for (const s of w.stars) { g.fillStyle = `rgba(230,232,255,${(s[2] * (0.6 + 0.4 * Math.sin(t * 0.7 + s[3]))).toFixed(2)})`; g.fillRect(s[0], s[1], 1.4, 1.4); }
+    if (w.moon) {
+      const mg = g.createRadialGradient(196, 44, 4, 196, 44, 46); mg.addColorStop(0, 'rgba(220,226,255,.35)'); mg.addColorStop(1, 'rgba(220,226,255,0)');
+      g.fillStyle = mg; g.fillRect(140, 0, 116, 100);
+      g.fillStyle = '#eeeada'; g.beginPath(); g.arc(196, 44, 12, 0, 7); g.fill();
+      g.fillStyle = 'rgba(160,160,170,.35)'; g.beginPath(); g.arc(192, 41, 3, 0, 7); g.arc(200, 49, 2.2, 0, 7); g.fill();
     }
   }
-  if (G.flash > 0) { g.fillStyle = `rgba(235,240,255,${(G.flash * 0.9).toFixed(2)})`; g.fillRect(0, 0, 128, 128); }
+  // clouds: a few wisps on a fine evening, a low lid of them in the wet
+  const dark = 1 - sky.day;
+  for (const c of w.clouds) {
+    c.x += c.v * dt * (storm ? 4 : clear ? 0.6 : 2); if (c.x - c.w > W) c.x = -c.w;
+    const v = Math.round(lerp(clear ? 235 : 150, clear ? 46 : 26, dark));
+    g.fillStyle = `rgba(${v},${v},${Math.round(v * 1.08)},${clear ? 0.16 : 0.5})`;
+    g.beginPath(); g.ellipse(c.x, c.y * (clear ? 1 : 1.3), c.w * (clear ? 1 : 1.6), c.w * (clear ? 0.2 : 0.42), 0, 0, 7); g.fill();
+  }
+  // far hills, then the roofs across the lane
+  g.fillStyle = `rgba(${Math.round(lerp(70, 12, dark))},${Math.round(lerp(84, 15, dark))},${Math.round(lerp(96, 26, dark))},.92)`;
+  g.beginPath(); g.moveTo(0, HH); w.hills.forEach((y, i) => g.lineTo((i / 17) * W, y)); g.lineTo(W, HH); g.fill();
+  const rc = `rgb(${Math.round(lerp(52, 7, dark))},${Math.round(lerp(46, 7, dark))},${Math.round(lerp(44, 11, dark))})`;
+  for (const b of w.roofs) {
+    const top = HH - b.h;
+    g.fillStyle = rc;
+    g.fillRect(b.x, top, b.w, b.h);
+    g.beginPath(); g.moveTo(b.x - 4, top); g.lineTo(b.x + b.w / 2, top - b.pitch); g.lineTo(b.x + b.w + 4, top); g.fill();
+    if (b.chim >= 0) g.fillRect(b.x + 6 + b.chim * (b.w - 18), top - b.pitch * 0.9, 6, b.pitch);
+    if (sky.day < 0.6) for (const l of b.lit) {
+      if (!l || (h < 12 && h > 0.2 + l[2] * 2.2)) continue;      // one by one the town goes to bed
+      const a = (0.75 + 0.2 * Math.sin(t * (2 + l[2] * 3) + l[2] * 40)) * (1 - sky.day);
+      g.fillStyle = `rgba(250,188,96,${a.toFixed(2)})`; g.fillRect(b.x + l[0] * (b.w - 10), top + l[1] * (b.h - 12), 7, 9);
+      g.fillStyle = `rgba(250,170,80,${(a * 0.18).toFixed(2)})`; g.fillRect(b.x + l[0] * (b.w - 10) - 5, top + l[1] * (b.h - 12) - 5, 17, 19);
+    }
+  }
+  if (!clear) {
+    g.fillStyle = `rgba(150,170,200,${storm ? 0.2 : 0.14})`; g.fillRect(0, 0, W, HH);
+    g.strokeStyle = 'rgba(200,215,240,.4)'; g.lineWidth = 1;
+    g.beginPath();
+    const slant = storm ? 5 : 2;
+    for (const d of w.drops) {
+      d[1] += d[2] * dt * (storm ? 620 : 420); d[0] -= slant * dt * 60 * 0.3;
+      if (d[1] > HH) { d[1] = -14; d[0] = Math.random() * (W + 30); }
+      g.moveTo(d[0], d[1]); g.lineTo(d[0] - slant, d[1] + 13);
+    }
+    g.stroke();
+    // beads on the glass that gather, then run
+    for (const b of w.beads) {
+      if (b.v === 0 && Math.random() < dt * (storm ? 0.5 : 0.25)) b.v = 20 + Math.random() * 60;
+      if (b.v > 0) { g.fillStyle = 'rgba(210,225,245,.16)'; g.fillRect(b.x - 0.5, b.y - b.v * 0.25, 1.2, b.v * 0.25); b.y += b.v * dt; b.x += Math.sin(b.y * 0.2) * 0.3; }
+      if (b.y > HH + 4) { b.y = Math.random() * HH * 0.7; b.x = Math.random() * W; b.v = 0; }
+      g.fillStyle = 'rgba(215,228,248,.28)'; g.beginPath(); g.arc(b.x, b.y, b.r * 0.7, 0, 7); g.fill();
+    }
+  }
+  // old glass: grime in the corners, and the room's glow caught in it after dark
+  const vg = g.createRadialGradient(W / 2, HH / 2, 50, W / 2, HH / 2, 170); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, `rgba(30,18,6,${(0.3 + dark * 0.25).toFixed(2)})`);
+  g.fillStyle = vg; g.fillRect(0, 0, W, HH);
+  if (G.flash > 0 && !G.reduced) { g.fillStyle = `rgba(235,240,255,${(G.flash * 0.75).toFixed(2)})`; g.fillRect(0, 0, W, HH); }
   w.tex.needsUpdate = true;
 }
 
@@ -802,4 +1247,4 @@ document.title = `${lore.inn} · Step Inside`;
 resize();
 requestAnimationFrame(frame);
 window.G = G;
-window.__room = { player, advance(min) { while (min > 0) { const s = Math.min(0.25, min); update(s); min -= s; } } };
+window.__room = { player, fx, sound, quality, life, bodies, applyQuality, toggleSit, advance(min) { while (min > 0) { const s = Math.min(0.25, min); update(s); min -= s; } } };

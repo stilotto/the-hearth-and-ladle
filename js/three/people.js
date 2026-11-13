@@ -5,7 +5,7 @@ import * as THREE from '../../vendor/three.module.min.js';
 const mats = new Map();
 export function mat(color, o = {}) {
   const key = color + JSON.stringify(o);
-  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness: 0.85, flatShading: true, ...o }));
+  if (!mats.has(key)) mats.set(key, new THREE.MeshStandardMaterial({ color, roughness: 0.85, ...o }));
   return mats.get(key);
 }
 const box = (w, h, d, m) => { const x = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m); x.castShadow = true; return x; };
@@ -57,6 +57,10 @@ export function makeItem(kind) {
 }
 
 // ------------------------------------------------------------------ bodies
+// Rounded limbs and a real face: eyes that blink, brows, a mouth that moves.
+const cap = (r, len, m, cast = true) => { const x = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 3, 8), m); x.castShadow = cast; return x; };
+const quiet = (mesh) => { mesh.castShadow = false; return mesh; };
+
 export function makePerson(a) {
   const L = a.look;
   const root = new THREE.Group();
@@ -65,124 +69,164 @@ export function makePerson(a) {
   const scale = kin === 'dwarf' ? 0.74 : kin === 'halfling' ? 0.66 : kin === 'elf' ? 1.06 : L.bodyH === 5 ? 0.88 : 1;
   root.scale.setScalar(scale);
   const tw = L.build === 'thin' ? 0.34 : L.build === 'stout' ? 0.5 : 0.42;
-  const skin = mat(L.skin), hair = mat(L.hair), top = mat(L.top), legs = mat(L.legs), boots = mat(L.boots || '#2b1d14');
+  const skin = mat(L.skin, { roughness: 0.7 }), hair = mat(L.hair, { roughness: 0.95 }), top = mat(L.top), legs = mat(L.legs), boots = mat(L.boots || '#2b1d14', { roughness: 0.6 });
   const sleeve = mat(L.sleeve ? L.sleeve : '#' + dark(L.top, 0.72).getHexString());
+  const gold = mat('#c9a64a', { metalness: 0.6, roughness: 0.4 });
 
   // legs: thigh + shin, pivoted at hip and knee
   const legParts = [];
   for (const side of [-1, 1]) {
     const hip = pivot(side * 0.1, 0.84, 0);
-    const thigh = box(0.14, 0.42, 0.16, L.robe ? top : legs); thigh.position.y = -0.21; hip.add(thigh);
+    const thigh = cyl(0.088, 0.068, 0.42, L.robe ? top : legs, 10); thigh.position.y = -0.21; hip.add(thigh);
+    const kn = quiet(sph(0.067, L.robe ? top : legs, 8, 6)); kn.position.y = -0.42; hip.add(kn);
     const knee = pivot(0, -0.42, 0); hip.add(knee);
-    const shin = box(0.13, 0.36, 0.15, L.robe ? top : legs); shin.position.y = -0.18; knee.add(shin);
-    const boot = box(0.15, 0.1, 0.24, boots); boot.position.set(0, -0.37, 0.04); knee.add(boot);
+    const shin = cyl(0.066, 0.05, 0.36, L.robe ? top : legs, 10); shin.position.y = -0.18; knee.add(shin);
+    const boot = cap(0.062, 0.12, boots, false); boot.rotation.x = Math.PI / 2; boot.scale.set(1.15, 1, 0.85); boot.position.set(0, -0.375, 0.045); knee.add(boot);
+    const cuff = quiet(cyl(0.07, 0.066, 0.1, boots, 10)); cuff.position.y = -0.29; knee.add(cuff);
     body.add(hip);
     legParts.push({ hip, knee });
   }
   if (L.robe) {
-    const skirt = cyl(tw * 0.5, tw * 0.72, 0.66, top, 10); skirt.position.y = 0.52; body.add(skirt);
+    const skirt = cyl(tw * 0.46, tw * 0.74, 0.7, top, 12); skirt.position.y = 0.5; skirt.scale.z = 0.8; body.add(skirt);
     legParts.skirt = skirt;
   }
 
-  // torso
+  // torso: tapered, with rounded shoulders, a waist and the hem of a tunic
   const torso = pivot(0, 0.84, 0); body.add(torso);
-  const chest = box(tw, 0.6, 0.26, top); chest.position.y = 0.3; torso.add(chest);
-  if (!L.robe && !L.apron) { const belt = box(tw + 0.01, 0.06, 0.27, mat(L.belt || '#34200f')); belt.position.y = 0.06; torso.add(belt); const bk = box(0.06, 0.05, 0.02, mat('#c9a64a', { metalness: 0.6, roughness: 0.4 })); bk.position.set(0, 0.06, 0.14); torso.add(bk); }
-  if (L.apron) { const ap = box(tw * 0.75, 0.62, 0.02, mat('#e8dfc8')); ap.position.set(0, 0.12, 0.14); torso.add(ap); }
-  if (L.chain) { const ch = box(tw + 0.02, 0.36, 0.28, mat('#8d9196', { metalness: 0.7, roughness: 0.45 })); ch.position.y = 0.4; torso.add(ch); }
-  if (L.trim) { const tr = box(0.06, 0.58, 0.02, mat(L.trim)); tr.position.set(0, 0.3, 0.135); torso.add(tr); }
-  if (L.holy) { const hs = box(0.05, 0.08, 0.02, mat('#e8d27a', { metalness: 0.7, roughness: 0.3 })); hs.position.set(0, 0.42, 0.15); torso.add(hs); }
-  if (L.cloak) {
-    const cl = box(tw + 0.1, 1.05, 0.05, mat(L.cloak)); cl.position.set(0, 0.08, -0.16); torso.add(cl);
-    const clasp = box(0.06, 0.05, 0.03, mat('#c9a64a', { metalness: 0.6 })); clasp.position.set(0, 0.58, 0.14); torso.add(clasp);
+  const chest = cyl(tw * 0.52, tw * 0.43, 0.52, top, 12); chest.position.y = 0.3; chest.scale.z = 0.6; torso.add(chest);
+  const yoke = sph(tw * 0.52, top, 12, 8); yoke.scale.set(1, 0.34, 0.6); yoke.position.y = 0.56; torso.add(yoke);
+  const pelvis = sph(tw * 0.45, L.robe ? top : legs, 12, 8); pelvis.scale.set(1, 0.5, 0.62); pelvis.position.y = 0.03; torso.add(pelvis);
+  if (L.build === 'stout') { const belly = sph(tw * 0.5, top, 12, 8); belly.scale.set(0.95, 0.75, 0.72); belly.position.set(0, 0.2, 0.05); torso.add(belly); }
+  if (!L.robe) { const hem = quiet(cyl(tw * 0.45, tw * 0.54, 0.16, top, 12)); hem.position.y = -0.02; hem.scale.z = 0.64; torso.add(hem); }
+  const fz = tw * 0.52 * 0.6;    // how far the chest stands out in front
+  if (!L.robe && !L.apron) {
+    const belt = quiet(cyl(tw * 0.455, tw * 0.455, 0.055, mat(L.belt || '#34200f'), 12)); belt.position.y = 0.07; belt.scale.z = 0.64; torso.add(belt);
+    const bk = quiet(box(0.055, 0.05, 0.02, gold)); bk.position.set(0, 0.07, tw * 0.455 * 0.64); torso.add(bk);
   }
+  if (L.apron) { const ap = quiet(box(tw * 0.7, 0.66, 0.02, mat('#e8dfc8'))); ap.position.set(0, 0.1, fz - 0.015); ap.rotation.x = -0.04; torso.add(ap); }
+  if (L.chain) { const ch = cyl(tw * 0.54, tw * 0.47, 0.36, mat('#8d9196', { metalness: 0.7, roughness: 0.45 }), 12); ch.position.y = 0.38; ch.scale.z = 0.64; torso.add(ch); }
+  if (L.trim) { const tr = quiet(box(0.05, 0.5, 0.02, mat(L.trim))); tr.position.set(0, 0.3, fz - 0.005); tr.rotation.x = -0.05; torso.add(tr); }
+  if (L.holy) { const hs = quiet(box(0.05, 0.08, 0.02, mat('#e8d27a', { metalness: 0.7, roughness: 0.3 }))); hs.position.set(0, 0.42, fz + 0.01); torso.add(hs); }
+  let cloak = null;
+  if (L.cloak) {
+    cloak = pivot(0, 0.6, -0.1); torso.add(cloak);
+    const cl = cyl(tw * 0.5, tw * 0.78, 1.08, mat(L.cloak, { side: THREE.DoubleSide }), 10); cl.geometry = new THREE.CylinderGeometry(tw * 0.5, tw * 0.78, 1.08, 10, 1, true, Math.PI * 0.5, Math.PI);
+    cl.position.set(0, -0.52, 0.06); cl.scale.z = 0.55; cloak.add(cl);
+    const clasp = quiet(box(0.06, 0.05, 0.03, gold)); clasp.position.set(0, 0.58, fz); torso.add(clasp);
+  }
+  const collar = quiet(cyl(0.075, 0.1, 0.05, sleeve, 10)); collar.position.y = 0.6; torso.add(collar);
 
   // arms
   const arms = [];
   for (const side of [-1, 1]) {
-    const sh = pivot(side * (tw / 2 + 0.06), 0.56, 0); torso.add(sh);
-    const up = box(0.11, 0.3, 0.12, sleeve); up.position.y = -0.15; sh.add(up);
+    const sh = pivot(side * (tw / 2 + 0.035), 0.55, 0); torso.add(sh);
+    const ball = quiet(sph(0.062, sleeve, 8, 6)); sh.add(ball);
+    const up = cyl(0.058, 0.046, 0.3, sleeve, 8); up.position.y = -0.15; sh.add(up);
     const el = pivot(0, -0.3, 0); sh.add(el);
-    const fore = box(0.1, 0.26, 0.11, sleeve); fore.position.y = -0.13; el.add(fore);
-    const hand = box(0.09, 0.09, 0.1, skin); hand.position.y = -0.3; el.add(hand);
+    const elb = quiet(sph(0.046, sleeve, 8, 6)); el.add(elb);
+    const fore = cyl(0.046, 0.036, 0.27, sleeve, 8); fore.position.y = -0.135; el.add(fore);
+    const hand = quiet(sph(0.05, skin, 8, 6)); hand.scale.set(0.75, 1.15, 0.95); hand.position.y = -0.3; el.add(hand);
     const grip = pivot(0, -0.32, 0.03); el.add(grip);
-    arms.push({ sh, el, grip });
+    arms.push({ sh, el, grip, side });
   }
 
   // head
   const neck = pivot(0, 0.62, 0); torso.add(neck);
+  const nk = quiet(cyl(0.05, 0.058, 0.1, skin, 8)); nk.position.y = 0.03; neck.add(nk);
   const head = pivot(0, 0.1, 0); neck.add(head);
   const faceMat = L.shadowFace ? mat('#15100c') : skin;
-  const skull = sph(0.135, faceMat, 10, 8); skull.scale.set(1, 1.12, 1.02); skull.position.y = 0.06; head.add(skull);
-  const nose = box(0.04, 0.05, 0.05, faceMat); nose.position.set(0, 0.05, 0.135); head.add(nose);
-  const eyeM = L.shadowFace ? new THREE.MeshBasicMaterial({ color: '#e8c070' }) : mat('#1f130c');
-  for (const s of [-1, 1]) { const e = box(0.028, 0.03, 0.02, eyeM); e.position.set(s * 0.05, 0.09, 0.128); head.add(e); }
-  if (kin === 'elf') for (const s of [-1, 1]) { const ear = cone(0.03, 0.12, skin, 4); ear.rotation.z = s * -1.1; ear.position.set(s * 0.15, 0.08, 0); head.add(ear); }
-  if (L.hairStyle !== 'bald' || L.hat) {
-    const cap = sph(0.15, hair, 10, 6, { theta: Math.PI * 0.55 }); cap.position.y = 0.07; cap.rotation.x = -0.25; head.add(cap);
-    if (L.hairStyle === 'wild') cap.scale.set(1.18, 1.15, 1.18);
+  const skull = sph(0.135, faceMat, 16, 12); skull.scale.set(0.97, 1.12, 1.02); skull.position.y = 0.06; head.add(skull);
+  const jaw = quiet(sph(0.1, faceMat, 12, 8)); jaw.scale.set(0.95, 0.8, 0.95); jaw.position.set(0, -0.03, 0.025); head.add(jaw);
+  const nose = quiet(sph(0.028, faceMat, 8, 6)); nose.scale.set(0.8, 1.2, 1.2); nose.position.set(0, 0.045, 0.14); head.add(nose);
+  for (const s of [-1, 1]) { const ear = quiet(sph(0.03, faceMat, 6, 5)); ear.scale.set(0.5, 1, 0.8); ear.position.set(s * 0.13, 0.06, 0); head.add(ear); }
+  const eyes = [], brows = [];
+  for (const s of [-1, 1]) {
+    const eye = pivot(s * 0.05, 0.085, 0.118); head.add(eye);
+    if (L.shadowFace) { eye.add(quiet(sph(0.014, new THREE.MeshBasicMaterial({ color: '#f0c470' }), 6, 5))); }
+    else {
+      const white = quiet(sph(0.021, mat('#cfc8ba', { roughness: 0.7 }), 8, 6)); white.scale.set(1.15, 0.85, 0.5); eye.add(white);
+      const iris = quiet(sph(0.012, mat('#20140c', { roughness: 0.2 }), 6, 5)); iris.scale.z = 0.5; iris.position.z = 0.008; eye.add(iris);
+      const brow = quiet(box(0.05, 0.012, 0.015, hair)); brow.position.set(s * 0.05, 0.118, 0.126); brow.rotation.z = s * -0.12; head.add(brow); brows.push(brow);
+    }
+    eyes.push(eye);
   }
-  if (L.hairStyle === 'long') { const lh = box(0.28, 0.34, 0.1, hair); lh.position.set(0, -0.08, -0.1); head.add(lh); }
-  if (L.hairStyle === 'bun') { const b = sph(0.07, hair, 8, 6); b.position.set(0, 0.16, -0.12); head.add(b); }
-  if (L.hairStyle === 'bald') { for (const s of [-1, 1]) { const f = box(0.03, 0.08, 0.12, hair); f.position.set(s * 0.135, 0.04, -0.02); head.add(f); } }
+  const mouth = quiet(box(0.05, 0.01, 0.012, mat(L.shadowFace ? '#000000' : '#4a1f1a')));
+  mouth.position.set(0, -0.02, 0.118); head.add(mouth);
+  if (kin === 'elf') for (const s of [-1, 1]) { const ear = quiet(cone(0.03, 0.12, skin, 4)); ear.rotation.z = s * -1.1; ear.position.set(s * 0.15, 0.08, 0); head.add(ear); }
+  if (L.hairStyle !== 'bald' || L.hat) {
+    const hc2 = sph(0.148, hair, 14, 8, { theta: Math.PI * 0.56 }); hc2.position.y = 0.068; hc2.rotation.x = -0.32; hc2.scale.set(1, 1.1, 1.05); head.add(hc2);
+    if (L.hairStyle === 'wild') { hc2.scale.set(1.2, 1.22, 1.2); for (let i = 0; i < 5; i++) { const tuft = quiet(cone(0.045, 0.1, hair, 5)); const an = i * 1.3; tuft.position.set(Math.sin(an) * 0.11, 0.2, Math.cos(an) * 0.1 - 0.03); tuft.rotation.set(Math.cos(an) * 0.7, 0, -Math.sin(an) * 0.7); head.add(tuft); } }
+  }
+  if (L.hairStyle === 'long') { const lh = sph(0.15, hair, 10, 8); lh.scale.set(1.02, 1.5, 0.6); lh.position.set(0, -0.06, -0.075); head.add(lh); }
+  if (L.hairStyle === 'bun') { const bn = quiet(sph(0.07, hair, 8, 6)); bn.position.set(0, 0.17, -0.12); head.add(bn); }
+  if (L.hairStyle === 'bald') { for (const s of [-1, 1]) { const f = quiet(sph(0.05, hair, 6, 5)); f.scale.set(0.4, 0.9, 1.3); f.position.set(s * 0.125, 0.05, -0.03); head.add(f); } }
   if (L.beard) {
-    const bd = box(0.22, L.beard === 'long' ? 0.3 : 0.12, 0.1, hair);
-    bd.position.set(0, L.beard === 'long' ? -0.1 : -0.02, 0.09); head.add(bd);
+    const long = L.beard === 'long';
+    const bd = quiet(sph(0.1, hair, 10, 8)); bd.scale.set(1.05, long ? 1.9 : 0.85, 0.75); bd.position.set(0, long ? -0.13 : -0.055, 0.05); head.add(bd);
+    const mo = quiet(box(0.09, 0.022, 0.03, hair)); mo.position.set(0, -0.002, 0.125); head.add(mo);
+    mouth.position.z = 0.127; mouth.position.y = -0.024;
   }
   const hc = mat(L.hatCol || L.cloak || '#3a3a3a');
   switch (L.hat) {
     case 'hood': {
-      const h = sph(0.19, hc, 10, 8, { theta: Math.PI * 0.62 }); h.position.set(0, 0.05, -0.02); h.rotation.x = -0.35; head.add(h);
-      const pt = cone(0.08, 0.16, hc, 6); pt.position.set(0, 0.18, -0.12); pt.rotation.x = -0.9; head.add(pt);
+      const h = sph(0.19, hc, 12, 8, { theta: Math.PI * 0.62 }); h.position.set(0, 0.05, -0.02); h.rotation.x = -0.35; head.add(h);
+      const pt = quiet(cone(0.08, 0.16, hc, 6)); pt.position.set(0, 0.18, -0.12); pt.rotation.x = -0.9; head.add(pt);
       break;
     }
     case 'wizard': {
-      const brim = cyl(0.26, 0.26, 0.02, hc, 14); brim.position.y = 0.15; head.add(brim);
-      const c = cone(0.15, 0.45, hc, 10); c.position.set(0, 0.38, -0.03); c.rotation.x = -0.18; head.add(c);
+      const brim = cyl(0.26, 0.27, 0.02, hc, 16); brim.position.y = 0.15; head.add(brim);
+      const c = cone(0.15, 0.45, hc, 12); c.position.set(0, 0.38, -0.03); c.rotation.x = -0.18; head.add(c);
       break;
     }
     case 'cap': case 'feathercap': {
-      const c = sph(0.17, hc, 10, 6); c.scale.set(1, 0.38, 1); c.position.set(0.02, 0.16, 0); c.rotation.z = -0.15; head.add(c);
-      const f = box(0.02, 0.26, 0.04, mat(L.hat === 'cap' ? '#ece4d4' : '#3f7a4a')); f.position.set(0.14, 0.27, -0.03); f.rotation.z = -0.4; head.add(f);
+      const c = sph(0.17, hc, 12, 6); c.scale.set(1, 0.38, 1); c.position.set(0.02, 0.16, 0); c.rotation.z = -0.15; head.add(c);
+      const f = quiet(box(0.02, 0.26, 0.04, mat(L.hat === 'cap' ? '#ece4d4' : '#3f7a4a'))); f.position.set(0.14, 0.27, -0.03); f.rotation.z = -0.4; head.add(f);
       break;
     }
     case 'helm': {
       const hm = mat('#8d9196', { metalness: 0.75, roughness: 0.35 });
-      const c = sph(0.155, hm, 12, 8, { theta: Math.PI * 0.55 }); c.position.y = 0.07; head.add(c);
-      const ng = box(0.03, 0.13, 0.03, hm); ng.position.set(0, 0.07, 0.15); head.add(ng);
+      const c = sph(0.155, hm, 14, 8, { theta: Math.PI * 0.55 }); c.position.y = 0.07; head.add(c);
+      const ng = quiet(box(0.03, 0.13, 0.03, hm)); ng.position.set(0, 0.07, 0.15); head.add(ng);
       break;
     }
-    case 'kerchief': { const c = sph(0.152, hc, 10, 6, { theta: Math.PI * 0.5 }); c.position.y = 0.08; c.rotation.x = -0.3; head.add(c); break; }
+    case 'kerchief': { const c = sph(0.152, hc, 12, 6, { theta: Math.PI * 0.5 }); c.position.y = 0.08; c.rotation.x = -0.3; head.add(c); break; }
     case 'straw': {
-      const sm = mat('#c9a55a'); const brim = cyl(0.28, 0.28, 0.02, sm, 14); brim.position.y = 0.16; head.add(brim);
-      const cr = cyl(0.13, 0.15, 0.12, sm, 10); cr.position.y = 0.23; head.add(cr);
-      const band = cyl(0.152, 0.152, 0.03, mat('#7a4a22'), 10); band.position.y = 0.19; head.add(band);
+      const sm = mat('#c9a55a'); const brim = cyl(0.28, 0.29, 0.02, sm, 16); brim.position.y = 0.16; head.add(brim);
+      const cr = quiet(cyl(0.13, 0.15, 0.12, sm, 12)); cr.position.y = 0.23; head.add(cr);
+      const band = quiet(cyl(0.152, 0.152, 0.03, mat('#7a4a22'), 12)); band.position.y = 0.19; head.add(band);
       break;
     }
-    case 'coif': { const c = sph(0.165, mat('#e8e2d2'), 10, 8, { theta: Math.PI * 0.66 }); c.position.set(0, 0.06, -0.02); c.rotation.x = -0.3; head.add(c); break; }
+    case 'coif': { const c = sph(0.165, mat('#e8e2d2'), 12, 8, { theta: Math.PI * 0.66 }); c.position.set(0, 0.06, -0.02); c.rotation.x = -0.3; head.add(c); break; }
   }
 
   // weapons on the back
   if (L.weapon === 'sword') {
-    const bl = box(0.05, 0.8, 0.015, mat('#aab0b6', { metalness: 0.8, roughness: 0.3 })); bl.position.set(0.05, 0.3, -0.17); bl.rotation.z = 0.35; torso.add(bl);
-    const hilt = box(0.18, 0.03, 0.03, mat('#c9a64a', { metalness: 0.6 })); hilt.position.set(-0.08, 0.66, -0.17); hilt.rotation.z = 0.35; torso.add(hilt);
+    const bl = quiet(box(0.05, 0.8, 0.015, mat('#aab0b6', { metalness: 0.8, roughness: 0.3 }))); bl.position.set(0.05, 0.3, -0.19); bl.rotation.z = 0.35; torso.add(bl);
+    const hilt = quiet(box(0.18, 0.03, 0.03, gold)); hilt.position.set(-0.08, 0.66, -0.19); hilt.rotation.z = 0.35; torso.add(hilt);
   }
-  if (L.weapon === 'bow') { const bw = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.015, 4, 16, Math.PI), mat('#7a5230')); bw.position.set(0, 0.3, -0.18); bw.rotation.z = Math.PI / 2 + 0.3; torso.add(bw); }
+  if (L.weapon === 'bow') { const bw = new THREE.Mesh(new THREE.TorusGeometry(0.45, 0.015, 4, 16, Math.PI), mat('#7a5230')); bw.position.set(0, 0.3, -0.2); bw.rotation.z = Math.PI / 2 + 0.3; torso.add(bw); }
   if (L.weapon === 'axe') {
-    const hd = cyl(0.02, 0.02, 0.7, mat('#6b4a2a')); hd.position.set(0, 0.35, -0.17); hd.rotation.z = -0.3; torso.add(hd);
-    const bl = box(0.2, 0.15, 0.02, mat('#9aa0a6', { metalness: 0.7, roughness: 0.4 })); bl.position.set(0.12, 0.66, -0.17); torso.add(bl);
+    const hd = quiet(cyl(0.02, 0.02, 0.7, mat('#6b4a2a'))); hd.position.set(0, 0.35, -0.19); hd.rotation.z = -0.3; torso.add(hd);
+    const bl = quiet(box(0.2, 0.15, 0.02, mat('#9aa0a6', { metalness: 0.7, roughness: 0.4 }))); bl.position.set(0.12, 0.66, -0.19); torso.add(bl);
   }
   let staff = null;
   if (L.weapon === 'staff') {
     staff = new THREE.Group();
     const st = cyl(0.02, 0.025, 1.7, mat('#6b4a2a')); st.position.y = 0.3; staff.add(st);
-    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.05), new THREE.MeshStandardMaterial({ color: '#7fd3ff', emissive: '#3aa0ff', emissiveIntensity: 1.2 }));
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.05), new THREE.MeshStandardMaterial({ color: '#7fd3ff', emissive: '#3aa0ff', emissiveIntensity: 2.4 }));
     gem.position.y = 1.18; staff.add(gem);
     arms[1].grip.add(staff);
   }
 
   root.traverse((o) => { if (o.isMesh) o.receiveShadow = false; });
-  return { root, body, torso, head, neck, legs: legParts, arms, staff, scale, held: null, heldKind: null, anim: { yaw: 0, headYaw: 0, drinkT: Math.random() * 10 } };
+  const joints = [torso, neck, head, arms[0].sh, arms[0].el, arms[1].sh, arms[1].el, legParts[0].hip, legParts[0].knee, legParts[1].hip, legParts[1].knee];
+  const r = Math.random;
+  return {
+    root, body, torso, chest, head, neck, legs: legParts, arms, staff, cloak, scale, eyes, brows, mouth, joints,
+    prev: joints.map(() => new THREE.Vector3()), fresh: true,
+    held: null, heldKind: null,
+    anim: { yaw: 0, headYaw: 0, headPitch: 0, drinkT: r() * 10, blinkT: 1 + r() * 4, glanceT: r() * 5, glance: 0, glanceP: 0, laugh: 0, sat: 0, ph: r() * 20, stepI: 0, fidget: r() * 12 },
+  };
 }
 
 export function makeCat(color) {

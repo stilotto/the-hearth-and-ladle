@@ -37,4 +37,9 @@ modules and no build step, so a push to `main` is a deploy.
   plot beat on top of the routine and resumes it afterwards.
 - Clues come from `speak(..., {clue})` or `witness(...)` and are only recorded
   if the player's ear (selected agent, or the clicked spot) is within range.
+- The 3D view lives in `js/three/`: `room.js` (scene, frame loop, player), `people.js`
+  (bodies), `props.js` (clutter), `tex.js` (canvas textures), `fx.js` (bloom and
+  grading), `sound.js` (spatial sound). Static meshes are merged by `batchStatics()`;
+  pass `{ dyn: true }` to `add()` for anything that moves or changes. `3d.html?hq`
+  stops the automatic drop to low quality.
 - No gendered pronouns for characters in generated text; use names or "they".
