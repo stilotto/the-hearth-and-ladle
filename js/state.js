@@ -5,6 +5,7 @@ export const G = {
   day: 1,
   dayStart: 960,   // 16:00 of the current inn-day
   speed: 1,
+  pace: 1,         // walking-speed scale; the 3D room slows it to a human stroll
   paused: true,
   agents: [],
   cast: [],

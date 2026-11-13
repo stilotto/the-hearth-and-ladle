@@ -240,7 +240,7 @@ for (let z = 5.2 * S; z < 10 * S; z += 0.9) { slab(3 * S - 0.06, 0, z - 0.04, 3 
     }
   }
   // kitchen door
-  slab(22 * S, 2.1, Z0, 23 * S, 2.2, Z0 + 0.1, M.beam);
+  slab(22 * S - 0.02, 2.1, Z0 + 0.001, 23 * S + 0.02, 2.22, Z0 + 0.1, M.beam);
   for (let y = 3; y <= 6; y++) {
     const k = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.7, 12), mat('#6b4424'));
     k.rotation.z = Math.PI / 2; add(k, 24.5 * S, 0.42, (y + 0.5) * S);
@@ -376,8 +376,8 @@ let lanternPool;
   gg.fillStyle = '#000'; gg.globalCompositeOperation = 'source-over'; gg.fillRect(X(12 * S) / 2, Y(2.2) / 2, S * PX, 1.1 * PX);
   const ft = new THREE.CanvasTexture(c); ft.colorSpace = THREE.SRGBColorSpace; ft.anisotropy = 4; frontMat.map = ft;
   const gt = new THREE.CanvasTexture(gc); gt.colorSpace = THREE.SRGBColorSpace; frontGlow.map = gt;
-  const wallOut = plane(FW, FH, frontMat); wallOut.position.set(cx, FH / 2, Z1 + 0.3); scene.add(wallOut);
-  const glowOut = plane(FW, FH, frontGlow); glowOut.position.set(cx, FH / 2, Z1 + 0.31); scene.add(glowOut);
+  const wallOut = plane(FW, FH, frontMat); wallOut.position.set(cx, FH / 2, Z1 + 0.27); scene.add(wallOut);
+  const glowOut = plane(FW, FH, frontGlow); glowOut.position.set(cx, FH / 2, Z1 + 0.275); glowOut.renderOrder = 2; scene.add(glowOut);
   lanternPool = plane(4.2, 3.4, new THREE.MeshBasicMaterial({ map: TX.glowSprite(), color: '#ff9a48', transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false, fog: false }));
   lanternPool.rotation.x = -Math.PI / 2; lanternPool.position.set(11.4, 0.012, Z1 + 1.5); scene.add(lanternPool);
   // the sign, swinging on its bracket
@@ -404,8 +404,10 @@ let kitchenGlow, kitchenPool;
 {
   const d = 1.9, z1 = Z0 - d;
   const fl = plane(KX1 - KX0 + 0.3, d, M.flag); fl.rotation.x = -Math.PI / 2; add(fl, KITCHEN.x, 0.003, Z0 - d / 2, { cast: false });
-  slab(KX0 - 0.2, 0, z1, KX0, 2.3, Z0, M.stone, { cast: false }); slab(KX1, 0, z1, KX1 + 0.2, 2.3, Z0, M.stone, { cast: false });
-  slab(KX0 - 0.2, 2.1, z1, KX1 + 0.2, 2.3, Z0, M.beam, { cast: false });
+  // these stop just short of the wall plane: two faces at one depth shimmer
+  slab(KX0 - 0.2, 0, z1, KX0, 2.3, Z0 - 0.02, M.stone, { cast: false }); slab(KX1, 0, z1, KX1 + 0.2, 2.3, Z0 - 0.02, M.stone, { cast: false });
+  slab(KX0 - 0.2, 2.1, z1, KX1 + 0.2, 2.3, Z0 - 0.02, M.beam, { cast: false });
+  slab(KX0 - 0.04, 0, Z0 - 0.02, KX0, 2.1, Z0 + 0.06, M.beam, { cast: false }); slab(KX1, 0, Z0 - 0.02, KX1 + 0.04, 2.1, Z0 + 0.06, M.beam, { cast: false });
   const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.66, 2.05, 0.05), mat('#5a3a22')); leaf.geometry.translate(0.33, 0, 0); leaf.rotation.y = 1.42; add(leaf, KX0 + 0.03, 1.03, Z0 - 0.04, { cast: false });
   const [c, g] = TX.canvas(64, 96);
   g.fillStyle = '#2a1608'; g.fillRect(0, 0, 64, 96);
@@ -627,6 +629,7 @@ function bodyFor(a) {
     b.blob.rotation.x = -Math.PI / 2; b.blob.renderOrder = 1; scene.add(b.blob);
     bodies.set(a, b);
     b.last = { x: a.x, y: a.y }; b.fresh = true;
+    if (b.pace) a.pace = Math.min(1.2, b.pace * (['maid', 'potboy', 'keeper', 'cook'].includes(a.role) ? 1.12 : 1));
   }
   return b;
 }
@@ -660,7 +663,7 @@ function syncPeople(dt, t) {
     sound.claps(fans.map((a) => ({ x: px2m(a.x), y: 1, z: px2m(a.y - 5) })));
   }
   life.wasMusic = G.music.playing;
-  const k = Math.min(1, dt * 11);
+  const k = Math.min(1, dt * 8);
 
   for (const a of G.agents) {
     const b = bodies.get(a);
@@ -679,7 +682,7 @@ function syncPeople(dt, t) {
     if (a.sitting && a.seat) yaw = a.seat.yaw;
     const partner = a.convo ? (a.convo.a === a ? a.convo.b : a.convo.a) : null;
     if (!moving && !a.sitting && partner) yaw = Math.atan2(partner.x - a.x, partner.y - a.y);
-    B.anim.yaw += wrap(yaw - B.anim.yaw) * Math.min(1, dt * 8);
+    B.anim.yaw += wrap(yaw - B.anim.yaw) * Math.min(1, dt * 5);
     B.root.rotation.set(0, B.anim.yaw, 0);
     B.blob.visible = !onStairs;
 
@@ -702,7 +705,9 @@ function syncPeople(dt, t) {
     let rootY = elev, tx = X, tz = Z;
     const [L, R] = B.legs;
     const [AL, AR] = B.arms;
-    const ph = a.walkPhase * Math.PI;
+    // stride by leg length, counted from the ground actually covered
+    if (moving) A.gait += px2m(Math.hypot(dx, dz)) / (0.64 * sc * B.stride);
+    const ph = A.gait * Math.PI;
     const act = a.activity || '';
     const talking = a.bubble && ms < a.bubble.until;
     const breath = Math.sin(t * 1.4 + ph0);
@@ -711,7 +716,7 @@ function syncPeople(dt, t) {
     B.body.rotation.set(0, 0, 0); B.body.position.set(0, 0, 0);
     AL.sh.rotation.z = -0.07; AR.sh.rotation.z = 0.07;
     B.chest.scale.y = 1 + breath * 0.014;
-    B.torso.rotation.x = breath * 0.008;
+    B.torso.rotation.x = breath * 0.008 + B.stoop;
     const mug = a.seat && a.seat.mug && a.seat.mug.owner === a.id && a.seat.mug.level > 0.02 ? a.seat.mug : null;
     let drinking = false, busyArms = false;
 
@@ -741,7 +746,7 @@ function syncPeople(dt, t) {
       if (moving) {
         rootY += Math.abs(Math.cos(ph)) * 0.035;
         B.torso.rotation.x += 0.07; B.torso.rotation.y = -swing * 0.16;
-        const si = Math.floor(a.walkPhase);
+        const si = Math.floor(A.gait);
         if (si !== A.stepI) { A.stepI = si; if (!life.fast) sound.step({ x: X, z: Z }, surfaceAt(X, Z), 0.55 * sc); }
       } else {
         // standing: weight drifts from one foot to the other
@@ -766,7 +771,8 @@ function syncPeople(dt, t) {
     }
     if (a.shake) { AR.sh.rotation.x = -1.4 + Math.sin(t * 14 + a.id) * 0.6; AL.sh.rotation.x = -1.2; B.torso.rotation.x = 0.2; busyArms = true; }
     if (a.sick) { B.torso.rotation.x = 0.9; B.head.rotation.x = 0.4; AL.sh.rotation.x = AR.sh.rotation.x = -1.2; busyArms = true; }
-    if (a.hand) { AR.sh.rotation.x = -2.5 + Math.sin(t * 5) * 0.08; AR.el.rotation.x = -0.45; AR.sh.rotation.z = 0.25; busyArms = true; }
+    // wanting service: a hand goes up for a moment now and then, not held aloft all night
+    if (a.hand && (t * 0.16 + ph0 * 0.37) % 1 < 0.3) { AR.sh.rotation.x = -2.4 + Math.sin(t * 5) * 0.08; AR.el.rotation.x = -0.5; AR.sh.rotation.z = 0.25; busyArms = true; }
 
     // a new line: give it a voice, from where they are
     if (a.bubble && a.bubble !== B.lastBubble) {
@@ -807,8 +813,8 @@ function syncPeople(dt, t) {
       if (A.glanceT < 0) { A.glanceT = rf(1.5, 6); A.glance = rnd() < 0.35 ? 0 : rf(-0.75, 0.75); A.glanceP = rf(-0.08, 0.16); }
       hy = A.glance; lookPitch = A.glanceP;
     }
-    A.headYaw += (hy - A.headYaw) * Math.min(1, dt * 4);
-    A.headPitch += (lookPitch - A.headPitch) * Math.min(1, dt * 4);
+    A.headYaw += (hy - A.headYaw) * Math.min(1, dt * 2.6);
+    A.headPitch += (lookPitch - A.headPitch) * Math.min(1, dt * 2.6);
     B.neck.rotation.y = A.headYaw * 0.35; B.head.rotation.y = A.headYaw * 0.65;
     B.head.rotation.x += A.headPitch;
     if (!busyArms && !talking && !a.sitting && !moving) {       // now and then, a hand to the chin
@@ -1369,6 +1375,7 @@ function drawWindow(w, sky, h, t, dt) {
 // ------------------------------------------------------------------ go
 paintSign();
 document.fonts?.ready.then(paintSign);
+G.pace = 0.56;      // about 1.2 m/s: an unhurried walk across a room
 createCast();
 startDay(1);
 G.paused = true;

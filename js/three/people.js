@@ -66,9 +66,20 @@ export function makePerson(a) {
   const root = new THREE.Group();
   const body = new THREE.Group(); root.add(body);
   const kin = L.kin;
-  const scale = kin === 'dwarf' ? 0.74 : kin === 'halfling' ? 0.66 : kin === 'elf' ? 1.06 : L.bodyH === 5 ? 0.88 : 1;
+  // No two people are built alike: height, girth, shoulders, limbs, head and bearing all
+  // vary, seeded by who they are so each keeps their shape from night to night.
+  let seed = (a.id * 2654435761) >>> 0;
+  const rr = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  const bell = () => (rr() + rr() + rr()) / 3;
+  const tall = 0.9 + bell() * 0.22;
+  const scale = (kin === 'dwarf' ? 0.74 : kin === 'halfling' ? 0.66 : kin === 'elf' ? 1.06 : L.bodyH === 5 ? 0.88 : 1) * tall;
   root.scale.setScalar(scale);
-  const tw = L.build === 'thin' ? 0.34 : L.build === 'stout' ? 0.5 : 0.42;
+  const girth = L.build === 'thin' ? 0.8 + rr() * 0.14 : L.build === 'stout' ? 1.16 + rr() * 0.3 : 0.92 + rr() * 0.2;
+  const shoulders = (kin === 'dwarf' ? 1.12 : 1) * (0.9 + rr() * 0.24);
+  const limb = 0.8 + (girth - 0.8) * 0.55 + rr() * 0.1;
+  const stoop = rr() < 0.22 ? 0.07 + rr() * 0.13 : rr() * 0.03;
+  const headK = (0.94 + rr() * 0.12) / Math.pow(tall, 0.7);
+  const tw = 0.4 * girth;
   const skin = mat(L.skin, { roughness: 0.7 }), hair = mat(L.hair, { roughness: 0.95 }), top = mat(L.top), legs = mat(L.legs), boots = mat(L.boots || '#2b1d14', { roughness: 0.6 });
   const sleeve = mat(L.sleeve ? L.sleeve : '#' + dark(L.top, 0.72).getHexString());
   const gold = mat('#c9a64a', { metalness: 0.6, roughness: 0.4 });
@@ -77,10 +88,10 @@ export function makePerson(a) {
   const legParts = [];
   for (const side of [-1, 1]) {
     const hip = pivot(side * 0.1, 0.84, 0);
-    const thigh = cyl(0.088, 0.068, 0.42, L.robe ? top : legs, 10); thigh.position.y = -0.21; hip.add(thigh);
+    const thigh = cyl(0.088, 0.068, 0.42, L.robe ? top : legs, 10); thigh.position.y = -0.21; thigh.scale.set(limb, 1, limb); hip.add(thigh);
     const kn = quiet(sph(0.067, L.robe ? top : legs, 8, 6)); kn.position.y = -0.42; hip.add(kn);
     const knee = pivot(0, -0.42, 0); hip.add(knee);
-    const shin = cyl(0.066, 0.05, 0.36, L.robe ? top : legs, 10); shin.position.y = -0.18; knee.add(shin);
+    const shin = cyl(0.066, 0.05, 0.36, L.robe ? top : legs, 10); shin.position.y = -0.18; shin.scale.set(limb, 1, limb); knee.add(shin);
     const boot = cap(0.062, 0.12, boots, false); boot.rotation.x = Math.PI / 2; boot.scale.set(1.15, 1, 0.85); boot.position.set(0, -0.375, 0.045); knee.add(boot);
     const cuff = quiet(cyl(0.07, 0.066, 0.1, boots, 10)); cuff.position.y = -0.29; knee.add(cuff);
     body.add(hip);
@@ -93,12 +104,13 @@ export function makePerson(a) {
 
   // torso: tapered, with rounded shoulders, a waist and the hem of a tunic
   const torso = pivot(0, 0.84, 0); body.add(torso);
-  const chest = cyl(tw * 0.52, tw * 0.43, 0.52, top, 12); chest.position.y = 0.3; chest.scale.z = 0.6; torso.add(chest);
-  const yoke = sph(tw * 0.52, top, 12, 8); yoke.scale.set(1, 0.34, 0.6); yoke.position.y = 0.56; torso.add(yoke);
+  const sw = 0.42 * shoulders * (0.75 + girth * 0.25);     // shoulder breadth is its own thing, not just girth
+  const chest = cyl(sw * 0.52, tw * 0.46, 0.52, top, 12); chest.position.y = 0.3; chest.scale.z = 0.6 * (0.8 + girth * 0.2) * (tw / sw > 1 ? 1.1 : 1); torso.add(chest);
+  const yoke = sph(sw * 0.52, top, 12, 8); yoke.scale.set(1, 0.34, 0.6); yoke.position.y = 0.56; torso.add(yoke);
   const pelvis = sph(tw * 0.45, L.robe ? top : legs, 12, 8); pelvis.scale.set(1, 0.5, 0.62); pelvis.position.y = 0.03; torso.add(pelvis);
-  if (L.build === 'stout') { const belly = sph(tw * 0.5, top, 12, 8); belly.scale.set(0.95, 0.75, 0.72); belly.position.set(0, 0.2, 0.05); torso.add(belly); }
+  if (girth > 1.05) { const belly = sph(tw * 0.5, top, 12, 8), bk2 = (girth - 1.05) * 1.6; belly.scale.set(0.98, 0.7 + bk2 * 0.25, 0.66 + bk2 * 0.45); belly.position.set(0, 0.2 - bk2 * 0.04, 0.03 + bk2 * 0.06); torso.add(belly); }
   if (!L.robe) { const hem = quiet(cyl(tw * 0.45, tw * 0.54, 0.16, top, 12)); hem.position.y = -0.02; hem.scale.z = 0.64; torso.add(hem); }
-  const fz = tw * 0.52 * 0.6;    // how far the chest stands out in front
+  const fz = Math.max(sw, tw) * 0.52 * 0.62;    // how far the chest stands out in front
   if (!L.robe && !L.apron) {
     const belt = quiet(cyl(tw * 0.455, tw * 0.455, 0.055, mat(L.belt || '#34200f'), 12)); belt.position.y = 0.07; belt.scale.z = 0.64; torso.add(belt);
     const bk = quiet(box(0.055, 0.05, 0.02, gold)); bk.position.set(0, 0.07, tw * 0.455 * 0.64); torso.add(bk);
@@ -119,12 +131,12 @@ export function makePerson(a) {
   // arms
   const arms = [];
   for (const side of [-1, 1]) {
-    const sh = pivot(side * (tw / 2 + 0.035), 0.55, 0); torso.add(sh);
+    const sh = pivot(side * (sw / 2 + 0.035), 0.55, 0); torso.add(sh);
     const ball = quiet(sph(0.062, sleeve, 8, 6)); sh.add(ball);
-    const up = cyl(0.058, 0.046, 0.3, sleeve, 8); up.position.y = -0.15; sh.add(up);
+    const up = cyl(0.058, 0.046, 0.3, sleeve, 8); up.position.y = -0.15; up.scale.set(limb, 1, limb); sh.add(up);
     const el = pivot(0, -0.3, 0); sh.add(el);
     const elb = quiet(sph(0.046, sleeve, 8, 6)); el.add(elb);
-    const fore = cyl(0.046, 0.036, 0.27, sleeve, 8); fore.position.y = -0.135; el.add(fore);
+    const fore = cyl(0.046, 0.036, 0.27, sleeve, 8); fore.position.y = -0.135; fore.scale.set(limb, 1, limb); el.add(fore);
     const hand = quiet(sph(0.05, skin, 8, 6)); hand.scale.set(0.75, 1.15, 0.95); hand.position.y = -0.3; el.add(hand);
     const grip = pivot(0, -0.32, 0.03); el.add(grip);
     arms.push({ sh, el, grip, side });
@@ -133,7 +145,7 @@ export function makePerson(a) {
   // head
   const neck = pivot(0, 0.62, 0); torso.add(neck);
   const nk = quiet(cyl(0.05, 0.058, 0.1, skin, 8)); nk.position.y = 0.03; neck.add(nk);
-  const head = pivot(0, 0.1, 0); neck.add(head);
+  const head = pivot(0, 0.1, 0); neck.add(head); head.scale.setScalar(headK);
   const faceMat = L.shadowFace ? mat('#15100c') : skin;
   const skull = sph(0.135, faceMat, 16, 12); skull.scale.set(0.97, 1.12, 1.02); skull.position.y = 0.06; head.add(skull);
   const jaw = quiet(sph(0.1, faceMat, 12, 8)); jaw.scale.set(0.95, 0.8, 0.95); jaw.position.set(0, -0.03, 0.025); head.add(jaw);
@@ -223,9 +235,10 @@ export function makePerson(a) {
   const r = Math.random;
   return {
     root, body, torso, chest, head, neck, legs: legParts, arms, staff, cloak, scale, eyes, brows, mouth, joints,
+    stoop, stride: 0.94 + rr() * 0.14, pace: Math.max(0.74, Math.min(1.14, 1.1 - (girth - 1) * 0.4 - stoop * 1.2 + (rr() - 0.5) * 0.14)),
     prev: joints.map(() => new THREE.Vector3()), fresh: true,
     held: null, heldKind: null,
-    anim: { yaw: 0, headYaw: 0, headPitch: 0, drinkT: r() * 10, blinkT: 1 + r() * 4, glanceT: r() * 5, glance: 0, glanceP: 0, laugh: 0, sat: 0, ph: r() * 20, stepI: 0, fidget: r() * 12 },
+    anim: { yaw: 0, headYaw: 0, headPitch: 0, drinkT: r() * 10, blinkT: 1 + r() * 4, glanceT: r() * 5, glance: 0, glanceP: 0, laugh: 0, sat: 0, ph: r() * 20, stepI: 0, gait: 0, fidget: r() * 12 },
   };
 }
 

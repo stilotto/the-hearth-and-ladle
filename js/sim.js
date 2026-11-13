@@ -87,7 +87,7 @@ export class Agent {
     if (go) { this.wait = null; this._resume(val); }
   }
   _move(dt) {
-    const sp = this.speed * (1 - Math.min(0.35, this.drunk * 0.3)) * dt;
+    const sp = this.speed * (G.pace || 1) * (this.pace || 1) * (1 - Math.min(0.35, this.drunk * 0.3)) * dt;
     let d = sp * TS;
     while (d > 0 && this.path) {
       const n = this.path[this.pathI];
