@@ -223,7 +223,7 @@ export function createSound(P) {
     rumble.gain.setTargetAtTime(0.25 + 0.5 * G.fire, t, 0.6);
     const rv = storm ? 0.17 : wet ? 0.1 : 0;
     for (const g of rains) g.gain.setTargetAtTime(rv, t, 1);
-    rains.door.gain.setTargetAtTime(rv * (0.25 + 2.2 * doorOpen), t, 0.15);
+    rains.door.gain.setTargetAtTime(rv * (0.12 + 0.6 * doorOpen), t, 0.15);
     roof.gain.setTargetAtTime(rv * 0.3, t, 1);
     // wind comes in gusts: down the chimney, and through the door whenever it opens
     gustT -= dt;
@@ -233,7 +233,7 @@ export function createSound(P) {
     const base = storm ? 0.5 : wet ? 0.22 : 0.09;
     wind.gain.setTargetAtTime(base * gust, t, 0.5);
     windF.frequency.setTargetAtTime(300 + gust * 420, t, 0.6);
-    doorWind.gain.setTargetAtTime(doorOpen * (0.06 + base * (0.3 + gust)), t, 0.15);
+    doorWind.gain.setTargetAtTime(doorOpen * (0.03 + base * 0.4 * (0.3 + gust)), t, 0.15);
     purrPan && place(purrPan, st.cat || P.hearth);
     purr.gain.setTargetAtTime(st.cat && st.catNear ? 0.5 : 0, t, 0.6);
     if (!on || G.paused) return;
